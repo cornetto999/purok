@@ -9,6 +9,7 @@ import {
 } from "recharts";
 import { useStore } from "@/lib/store";
 import { StatCard } from "@/components/stat-card";
+import { PrecinctTally } from "@/components/precinct-tally";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
@@ -182,6 +183,9 @@ function DashboardPage() {
             ))}
           </div>
         </div>
+
+        {/* Analytics Section */}
+        <PrecinctTally />
       </div>
     </>
   );

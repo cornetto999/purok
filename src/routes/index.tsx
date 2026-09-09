@@ -26,5 +26,12 @@ function Index() {
     }
   }, [state.session, navigate]);
 
-  return null;
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="text-center">
+        <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent mx-auto"></div>
+        <p className="text-sm font-medium text-slate-600">Loading...</p>
+      </div>
+    </div>
+  );
 }

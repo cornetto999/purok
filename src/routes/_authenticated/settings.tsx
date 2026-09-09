@@ -1,8 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useRef, useState, useEffect } from "react";
-import { Download, FileSpreadsheet, RotateCcw, Upload } from "lucide-react";
+import { Download, FileSpreadsheet, RotateCcw, Upload, TableProperties } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { exportToExcel, downloadTemplate, importFromExcel } from "@/lib/excel";
+import { ImportDataModal } from "@/components/import-data-modal";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   head: () => ({
@@ -20,6 +21,7 @@ function SettingsPage() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importStatus, setImportStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   useEffect(() => {
     if (state.session?.role !== "Admin") {
@@ -36,9 +38,30 @@ function SettingsPage() {
     });
   };
 
+  const [isImporting, setIsImporting] = useState(false);
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    alert("Bulk import is currently disabled in Supabase mode. Please use the Supabase dashboard to import CSVs.");
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm("WARNING: This will completely replace all existing resident data (Barangays, Puroks, Households, Members) in the database. Are you absolutely sure you want to proceed?")) {
+      e.target.value = "";
+      return;
+    }
+
+    setIsImporting(true);
+    setImportStatus(null);
+    try {
+      const data = await importFromExcel(file);
+      await store.bulkImport(data);
+      setImportStatus({ type: "success", message: `Successfully imported ${data.members.length} members across ${data.barangays.length} barangays.` });
+    } catch (err: any) {
+      console.error(err);
+      setImportStatus({ type: "error", message: err.message || "Failed to import file." });
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   const handleReset = () => {
@@ -80,13 +103,17 @@ function SettingsPage() {
           <p className="mb-5 text-xs text-slate-500">Import residents from an Excel file or export the current data.</p>
 
           <div className="flex flex-wrap gap-3">
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700">
+              <Upload className="h-4 w-4" /> {isImporting ? "Importing..." : "Import Excel"}
+              <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImport} disabled={isImporting} className="hidden" />
+            </label>
+
             <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+              onClick={() => setShowImportModal(true)}
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700"
             >
-              <Upload className="h-4 w-4" /> Import Excel
+              <TableProperties className="h-4 w-4" /> Import ENTRY Sheet
             </button>
-            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImport} className="hidden" />
 
             <button
               onClick={handleExport}
@@ -151,6 +178,10 @@ function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {showImportModal && (
+        <ImportDataModal onClose={() => setShowImportModal(false)} />
+      )}
     </>
   );
 }
