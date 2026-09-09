@@ -14,6 +14,7 @@ export interface Purok {
 export interface Household {
   id: number;
   purokId: number;
+  barangayId?: number;
   householdLeaderName: string;
   address: string;
 }
@@ -23,6 +24,7 @@ export type CivilStatus = "Single" | "Married" | "Widowed" | "Separated";
 export interface Member {
   id: number;
   householdId: number;
+  barangayId?: number;
 
   lastName: string;
   firstName: string;
@@ -58,6 +60,19 @@ export interface User {
   role: UserRole;
   linked_entity_id: number | null;
   displayName: string;
+  failed_login_attempts?: number;
+  account_locked_until?: string | null;
+}
+
+export type SecurityEventType = "FAILED_LOGIN" | "ACCOUNT_LOCKED" | "CAPTCHA_FAILED";
+
+export interface SecurityLog {
+  id: string;
+  user_id: number | null;
+  attempted_username: string;
+  ip_address: string;
+  event_type: SecurityEventType;
+  created_at: string;
 }
 
 /** Computed full name for display */
@@ -97,6 +112,11 @@ export interface Database {
         Row: User;
         Insert: Omit<User, "id">;
         Update: Partial<Omit<User, "id">>;
+      };
+      security_logs: {
+        Row: SecurityLog;
+        Insert: Omit<SecurityLog, "id" | "created_at">;
+        Update: Partial<Omit<SecurityLog, "id">>;
       };
     };
   };

@@ -1,4 +1,4 @@
-import { Accessibility, Flag, Pencil, Trash2, Users, X } from "lucide-react";
+import { Accessibility, Flag, MapPin, Pencil, Trash2, Users, X } from "lucide-react";
 import type { Member, Household, Purok, Barangay } from "@/lib/types";
 import { memberFullName } from "@/lib/types";
 
@@ -28,14 +28,16 @@ function DetailSection({ title, children }: { title: string; children: React.Rea
   );
 }
 
-export function MemberDetailPanel({ member, householdById, purokById, barangayById, canManage, onClose, onEdit, onDelete }: {
+export function MemberDetailPanel({ member, householdById, purokById, barangayById, canManage, canDelete = true, onClose, onEdit, onFastEdit, onDelete }: {
   member: Member;
   householdById: Map<number, Household>;
   purokById: Map<number, Purok>;
   barangayById: Map<number, Barangay>;
   canManage: boolean;
+  canDelete?: boolean;
   onClose: () => void;
   onEdit: () => void;
+  onFastEdit?: () => void;
   onDelete: () => void;
 }) {
   const household = householdById.get(member.householdId);
@@ -56,12 +58,23 @@ export function MemberDetailPanel({ member, householdById, purokById, barangayBy
           <div className="flex items-center gap-1">
             {canManage && (
               <>
+                {onFastEdit && (
+                  <button
+                    onClick={onFastEdit}
+                    className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50/70 px-2.5 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
+                    title="Quick move to another Purok / Barangay"
+                  >
+                    <MapPin className="h-3.5 w-3.5" /> Move Purok
+                  </button>
+                )}
                 <button onClick={onEdit} className="flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50">
                   <Pencil className="h-3.5 w-3.5" /> Edit
                 </button>
-                <button onClick={onDelete} className="flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50">
-                  <Trash2 className="h-3.5 w-3.5" /> Delete
-                </button>
+                {canDelete && (
+                  <button onClick={onDelete} className="flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50">
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </button>
+                )}
               </>
             )}
             <button onClick={onClose} aria-label="Close" className="ml-1 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100">

@@ -13,9 +13,14 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedDuplicateMembersRouteImport } from './routes/_authenticated/duplicate-members'
+import { Route as AuthenticatedHouseholdsRouteImport } from './routes/_authenticated/households'
 import { Route as AuthenticatedMembersRouteImport } from './routes/_authenticated/members'
 import { Route as AuthenticatedMyDashboardRouteImport } from './routes/_authenticated/my-dashboard'
+import { Route as AuthenticatedPurokLeadersRouteImport } from './routes/_authenticated/purok-leaders'
 import { Route as AuthenticatedPuroksRouteImport } from './routes/_authenticated/puroks'
+import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticated/reports'
+import { Route as AuthenticatedSecurityRouteImport } from './routes/_authenticated/security'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedUsersRouteImport } from './routes/_authenticated/users'
 
@@ -38,6 +43,17 @@ const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedDuplicateMembersRoute =
+  AuthenticatedDuplicateMembersRouteImport.update({
+    id: '/duplicate-members',
+    path: '/duplicate-members',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedHouseholdsRoute = AuthenticatedHouseholdsRouteImport.update({
+  id: '/households',
+  path: '/households',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedMembersRoute = AuthenticatedMembersRouteImport.update({
   id: '/members',
   path: '/members',
@@ -49,9 +65,25 @@ const AuthenticatedMyDashboardRoute =
     path: '/my-dashboard',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedPurokLeadersRoute =
+  AuthenticatedPurokLeadersRouteImport.update({
+    id: '/purok-leaders',
+    path: '/purok-leaders',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedPuroksRoute = AuthenticatedPuroksRouteImport.update({
   id: '/puroks',
   path: '/puroks',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedReportsRoute = AuthenticatedReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedSecurityRoute = AuthenticatedSecurityRouteImport.update({
+  id: '/security',
+  path: '/security',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
@@ -69,9 +101,14 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/duplicate-members': typeof AuthenticatedDuplicateMembersRoute
+  '/households': typeof AuthenticatedHouseholdsRoute
   '/members': typeof AuthenticatedMembersRoute
   '/my-dashboard': typeof AuthenticatedMyDashboardRoute
+  '/purok-leaders': typeof AuthenticatedPurokLeadersRoute
   '/puroks': typeof AuthenticatedPuroksRoute
+  '/reports': typeof AuthenticatedReportsRoute
+  '/security': typeof AuthenticatedSecurityRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/users': typeof AuthenticatedUsersRoute
 }
@@ -79,9 +116,14 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/duplicate-members': typeof AuthenticatedDuplicateMembersRoute
+  '/households': typeof AuthenticatedHouseholdsRoute
   '/members': typeof AuthenticatedMembersRoute
   '/my-dashboard': typeof AuthenticatedMyDashboardRoute
+  '/purok-leaders': typeof AuthenticatedPurokLeadersRoute
   '/puroks': typeof AuthenticatedPuroksRoute
+  '/reports': typeof AuthenticatedReportsRoute
+  '/security': typeof AuthenticatedSecurityRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/users': typeof AuthenticatedUsersRoute
 }
@@ -91,9 +133,14 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/duplicate-members': typeof AuthenticatedDuplicateMembersRoute
+  '/_authenticated/households': typeof AuthenticatedHouseholdsRoute
   '/_authenticated/members': typeof AuthenticatedMembersRoute
   '/_authenticated/my-dashboard': typeof AuthenticatedMyDashboardRoute
+  '/_authenticated/purok-leaders': typeof AuthenticatedPurokLeadersRoute
   '/_authenticated/puroks': typeof AuthenticatedPuroksRoute
+  '/_authenticated/reports': typeof AuthenticatedReportsRoute
+  '/_authenticated/security': typeof AuthenticatedSecurityRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/users': typeof AuthenticatedUsersRoute
 }
@@ -103,9 +150,14 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/duplicate-members'
+    | '/households'
     | '/members'
     | '/my-dashboard'
+    | '/purok-leaders'
     | '/puroks'
+    | '/reports'
+    | '/security'
     | '/settings'
     | '/users'
   fileRoutesByTo: FileRoutesByTo
@@ -113,9 +165,14 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/duplicate-members'
+    | '/households'
     | '/members'
     | '/my-dashboard'
+    | '/purok-leaders'
     | '/puroks'
+    | '/reports'
+    | '/security'
     | '/settings'
     | '/users'
   id:
@@ -124,9 +181,14 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/login'
     | '/_authenticated/dashboard'
+    | '/_authenticated/duplicate-members'
+    | '/_authenticated/households'
     | '/_authenticated/members'
     | '/_authenticated/my-dashboard'
+    | '/_authenticated/purok-leaders'
     | '/_authenticated/puroks'
+    | '/_authenticated/reports'
+    | '/_authenticated/security'
     | '/_authenticated/settings'
     | '/_authenticated/users'
   fileRoutesById: FileRoutesById
@@ -167,6 +229,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/duplicate-members': {
+      id: '/_authenticated/duplicate-members'
+      path: '/duplicate-members'
+      fullPath: '/duplicate-members'
+      preLoaderRoute: typeof AuthenticatedDuplicateMembersRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/households': {
+      id: '/_authenticated/households'
+      path: '/households'
+      fullPath: '/households'
+      preLoaderRoute: typeof AuthenticatedHouseholdsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/members': {
       id: '/_authenticated/members'
       path: '/members'
@@ -181,11 +257,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedMyDashboardRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/purok-leaders': {
+      id: '/_authenticated/purok-leaders'
+      path: '/purok-leaders'
+      fullPath: '/purok-leaders'
+      preLoaderRoute: typeof AuthenticatedPurokLeadersRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/puroks': {
       id: '/_authenticated/puroks'
       path: '/puroks'
       fullPath: '/puroks'
       preLoaderRoute: typeof AuthenticatedPuroksRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/reports': {
+      id: '/_authenticated/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof AuthenticatedReportsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/security': {
+      id: '/_authenticated/security'
+      path: '/security'
+      fullPath: '/security'
+      preLoaderRoute: typeof AuthenticatedSecurityRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/settings': {
@@ -207,18 +304,28 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedDuplicateMembersRoute: typeof AuthenticatedDuplicateMembersRoute
+  AuthenticatedHouseholdsRoute: typeof AuthenticatedHouseholdsRoute
   AuthenticatedMembersRoute: typeof AuthenticatedMembersRoute
   AuthenticatedMyDashboardRoute: typeof AuthenticatedMyDashboardRoute
+  AuthenticatedPurokLeadersRoute: typeof AuthenticatedPurokLeadersRoute
   AuthenticatedPuroksRoute: typeof AuthenticatedPuroksRoute
+  AuthenticatedReportsRoute: typeof AuthenticatedReportsRoute
+  AuthenticatedSecurityRoute: typeof AuthenticatedSecurityRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedUsersRoute: typeof AuthenticatedUsersRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedDuplicateMembersRoute: AuthenticatedDuplicateMembersRoute,
+  AuthenticatedHouseholdsRoute: AuthenticatedHouseholdsRoute,
   AuthenticatedMembersRoute: AuthenticatedMembersRoute,
   AuthenticatedMyDashboardRoute: AuthenticatedMyDashboardRoute,
+  AuthenticatedPurokLeadersRoute: AuthenticatedPurokLeadersRoute,
   AuthenticatedPuroksRoute: AuthenticatedPuroksRoute,
+  AuthenticatedReportsRoute: AuthenticatedReportsRoute,
+  AuthenticatedSecurityRoute: AuthenticatedSecurityRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedUsersRoute: AuthenticatedUsersRoute,
 }

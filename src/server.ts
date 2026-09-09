@@ -44,8 +44,90 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+import { handleSecureLogin } from "./lib/server-security";
+import { supabase } from "./lib/supabase";
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const url = new URL(request.url);
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /api/login — Rate-limited authentication & reCAPTCHA API
+    // ─────────────────────────────────────────────────────────────
+    if (url.pathname === "/api/login" && request.method === "POST") {
+      try {
+        const body = (await request.json()) as {
+          username?: string;
+          password?: string;
+          captchaToken?: string;
+        };
+
+        const clientIp =
+          request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+          request.headers.get("cf-connecting-ip") ||
+          request.headers.get("x-real-ip") ||
+          "127.0.0.1";
+
+        const result = await handleSecureLogin({
+          username: body.username || "",
+          password: body.password || "",
+          captchaToken: body.captchaToken || "",
+          clientIp,
+        });
+
+        return new Response(JSON.stringify(result), {
+          status: result.status,
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (err) {
+        console.error("Error in /api/login endpoint:", err);
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "An unexpected server error occurred.",
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /api/security/unlock — Admin Unlock Account API
+    // ─────────────────────────────────────────────────────────────
+    if (url.pathname === "/api/security/unlock" && request.method === "POST") {
+      try {
+        const { userId } = (await request.json()) as { userId: number };
+        if (!userId) {
+          return new Response(
+            JSON.stringify({ success: false, error: "Missing userId." }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        }
+
+        await supabase
+          .from("users")
+          .update({
+            failed_login_attempts: 0,
+            account_locked_until: null,
+          })
+          .eq("id", userId);
+
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (err) {
+        console.error("Error in /api/security/unlock:", err);
+        return new Response(
+          JSON.stringify({ success: false, error: "Failed to unlock account." }),
+          { status: 500, headers: { "Content-Type": "application/json" } },
+        );
+      }
+    }
+
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);

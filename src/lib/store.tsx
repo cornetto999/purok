@@ -1,8 +1,39 @@
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  type ReactNode,
+} from "react";
 import type { Barangay, Purok, Household, Member, User } from "./types";
 import type { DataSet } from "./excel";
-import { hashPassword, createSession, getSession, clearSession, type Session } from "./auth";
+import {
+  hashPassword,
+  createSession,
+  getSession,
+  clearSession,
+  type Session,
+} from "./auth";
 import { supabase } from "./supabase";
+
+const QUERY_PAGE_SIZE = 1000;
+
+async function fetchAllRows<T>(
+  fetchPage: (
+    from: number,
+    to: number,
+  ) => Promise<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += QUERY_PAGE_SIZE) {
+    const { data, error } = await fetchPage(from, from + QUERY_PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < QUERY_PAGE_SIZE) return rows;
+  }
+}
 
 export interface AppState {
   barangays: Barangay[];
@@ -10,36 +41,107 @@ export interface AppState {
   households: Household[];
   members: Member[];
   users: User[];
+  pendingDuplicates: PendingDuplicate[];
   session: Session | null;
   initialized: boolean;
 }
 
+export interface PendingDuplicate {
+  id: string;
+  importedMember: Omit<Member, "id">;
+  existingMemberId: number;
+}
+
+export interface ImportResult {
+  importedMembers: number;
+  duplicateMembers: number;
+}
+
+export interface LoginResponse {
+  success: boolean;
+  session: Session | null;
+  error?: string;
+  accountLocked?: boolean;
+  lockedUntil?: string | null;
+}
+
 interface StoreContextValue {
   state: AppState;
-  login: (username: string, password: string) => Promise<Session | null>;
+  login: (
+    username: string,
+    password: string,
+    captchaToken?: string,
+  ) => Promise<LoginResponse>;
   logout: () => void;
 
   // API Methods
   addMember: (data: Omit<Member, "id">) => Promise<void>;
-  updateMember: (id: number, data: Partial<Omit<Member, "id">>) => Promise<void>;
+  updateMember: (
+    id: number,
+    data: Partial<Omit<Member, "id">>,
+  ) => Promise<void>;
   deleteMember: (id: number) => Promise<void>;
 
   addHousehold: (data: Omit<Household, "id">) => Promise<void>;
-  updateHousehold: (id: number, data: Partial<Omit<Household, "id">>) => Promise<void>;
+  updateHousehold: (
+    id: number,
+    data: Partial<Omit<Household, "id">>,
+  ) => Promise<void>;
   deleteHousehold: (id: number) => Promise<void>;
+  saveHouseholdWithUser: (
+    householdData: Omit<Household, "id">,
+    userAccount?: { username: string; password?: string },
+    existingHouseholdId?: number,
+  ) => Promise<void>;
 
   addPurok: (data: Omit<Purok, "id">) => Promise<void>;
   updatePurok: (id: number, data: Partial<Omit<Purok, "id">>) => Promise<void>;
   deletePurok: (id: number) => Promise<void>;
+  savePurokWithUser: (
+    purokData: Omit<Purok, "id">,
+    userAccount?: { username: string; password?: string },
+    existingPurokId?: number,
+  ) => Promise<void>;
 
   addUser: (data: Omit<User, "id">) => Promise<void>;
   deleteUser: (id: number) => Promise<void>;
 
   refreshData: () => Promise<void>;
-  bulkImport: (data: DataSet) => Promise<void>;
+  bulkImport: (data: DataSet) => Promise<ImportResult>;
+  approveDuplicate: (id: string) => Promise<void>;
+  dismissDuplicate: (id: string) => void;
+  approveAllDuplicates: () => Promise<void>;
+  dismissAllDuplicates: () => void;
 }
 
 const StoreContext = createContext<StoreContextValue | null>(null);
+const PENDING_DUPLICATES_KEY = "brms_pending_duplicates";
+
+function loadPendingDuplicates(): PendingDuplicate[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const saved = localStorage.getItem(PENDING_DUPLICATES_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
+function duplicateKey(
+  member: Pick<
+    Member,
+    "lastName" | "firstName" | "middleName" | "pn" | "no" | "address"
+  >,
+): string {
+  const normalize = (value: string) =>
+    value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  const name = [member.lastName, member.firstName, member.middleName]
+    .map(normalize)
+    .join("|");
+  const identifier =
+    normalize(member.pn) || normalize(member.no) || normalize(member.address);
+  return `${name}|${identifier}`;
+}
 
 export function useStore(): StoreContextValue {
   const ctx = useContext(StoreContext);
@@ -54,6 +156,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     households: [],
     members: [],
     users: [],
+    pendingDuplicates: loadPendingDuplicates(),
     session: getSession(),
     initialized: false,
   });
@@ -61,20 +164,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshData = useCallback(async () => {
     try {
       const [b, p, h, m, u] = await Promise.all([
-        supabase.from("barangays").select("*"),
-        supabase.from("puroks").select("*"),
-        supabase.from("households").select("*"),
-        supabase.from("members").select("*"),
-        supabase.from("users").select("*"),
+        fetchAllRows((from, to) =>
+          supabase.from("barangays").select("*").range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          supabase.from("puroks").select("*").range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          supabase.from("households").select("*").range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          supabase.from("members").select("*").range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          supabase.from("users").select("*").range(from, to),
+        ),
       ]);
 
       setState((prev) => ({
         ...prev,
-        barangays: b.data || [],
-        puroks: p.data || [],
-        households: h.data || [],
-        members: m.data || [],
-        users: u.data || [],
+        barangays: b,
+        puroks: p,
+        households: h,
+        members: m,
+        users: u,
         initialized: true,
       }));
     } catch (err) {
@@ -86,26 +199,51 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     void refreshData();
   }, [refreshData]);
 
-  const login = useCallback(async (username: string, password: string): Promise<Session | null> => {
-    // Refresh users just in case
-    const { data: users, error } = await supabase.from("users").select("*");
-    if (error) console.error("Login fetch users error:", error);
-    
-    const userList = users || state.users;
-    
-    const user = userList.find((u) => u.username === username);
-    if (!user) {
-      console.warn("User not found:", username);
-      return null;
-    }
+  const login = useCallback(
+    async (
+      username: string,
+      password: string,
+      captchaToken: string = "",
+    ): Promise<LoginResponse> => {
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password, captchaToken }),
+        });
 
-    const hash = await hashPassword(password);
-    if (hash !== user.password_hash) return null;
+        const data = (await res.json()) as {
+          success?: boolean;
+          user?: User;
+          error?: string;
+          accountLocked?: boolean;
+          lockedUntil?: string | null;
+        };
 
-    const session = createSession(user);
-    setState((prev) => ({ ...prev, session }));
-    return session;
-  }, [state.users]);
+        if (data.success && data.user) {
+          const session = createSession(data.user);
+          setState((prev) => ({ ...prev, session }));
+          return { success: true, session };
+        }
+
+        return {
+          success: false,
+          session: null,
+          error: data.error || "Invalid username or password.",
+          accountLocked: Boolean(data.accountLocked),
+          lockedUntil: data.lockedUntil || null,
+        };
+      } catch (err) {
+        console.error("Login fetch error:", err);
+        return {
+          success: false,
+          session: null,
+          error: "Unable to connect to login server. Please try again.",
+        };
+      }
+    },
+    [],
+  );
 
   const logout = useCallback(() => {
     clearSession();
@@ -117,7 +255,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const { error } = await supabase.from("members").insert([data]);
     if (!error) await refreshData();
   };
-  const updateMember = async (id: number, data: Partial<Omit<Member, "id">>) => {
+  const updateMember = async (
+    id: number,
+    data: Partial<Omit<Member, "id">>,
+  ) => {
     const { error } = await supabase.from("members").update(data).eq("id", id);
     if (!error) await refreshData();
   };
@@ -130,8 +271,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const { error } = await supabase.from("households").insert([data]);
     if (!error) await refreshData();
   };
-  const updateHousehold = async (id: number, data: Partial<Omit<Household, "id">>) => {
-    const { error } = await supabase.from("households").update(data).eq("id", id);
+  const updateHousehold = async (
+    id: number,
+    data: Partial<Omit<Household, "id">>,
+  ) => {
+    const { error } = await supabase
+      .from("households")
+      .update(data)
+      .eq("id", id);
     if (!error) await refreshData();
   };
   const deleteHousehold = async (id: number) => {
@@ -160,69 +307,284 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const { error } = await supabase.from("users").delete().eq("id", id);
     if (!error) await refreshData();
   };
-
-  const bulkImport = async (data: DataSet) => {
-    // 1. Delete all existing members, households, puroks, barangays (reverse order for FK safety)
-    const { data: existingBarangays } = await supabase.from("barangays").select("id");
-    if (existingBarangays && existingBarangays.length > 0) {
-      // Delete members first, then households, puroks, barangays
-      const { error: delMembers } = await supabase.from("members").delete().neq("id", 0);
-      if (delMembers) console.warn("Delete members:", delMembers.message);
-      const { error: delHouseholds } = await supabase.from("households").delete().neq("id", 0);
-      if (delHouseholds) console.warn("Delete households:", delHouseholds.message);
-      const { error: delPuroks } = await supabase.from("puroks").delete().neq("id", 0);
-      if (delPuroks) console.warn("Delete puroks:", delPuroks.message);
-      const { error: delBarangays } = await supabase.from("barangays").delete().neq("id", 0);
-      if (delBarangays) console.warn("Delete barangays:", delBarangays.message);
+  const saveHouseholdWithUser = async (
+    householdData: Omit<Household, "id">,
+    userAccount?: { username: string; password?: string },
+    existingHouseholdId?: number,
+  ) => {
+    let targetHouseholdId = existingHouseholdId;
+    if (existingHouseholdId) {
+      const { error } = await supabase
+        .from("households")
+        .update(householdData)
+        .eq("id", existingHouseholdId);
+      if (error) throw new Error(`Failed to update household: ${error.message}`);
+    } else {
+      const { data: inserted, error } = await supabase
+        .from("households")
+        .insert([householdData])
+        .select()
+        .single();
+      if (error || !inserted) {
+        throw new Error(
+          `Failed to create household: ${error?.message || "Unknown error"}`,
+        );
+      }
+      targetHouseholdId = inserted.id;
     }
 
-    // 2. Insert Barangays and map IDs
+    if (targetHouseholdId && userAccount && userAccount.username.trim()) {
+      const cleanUsername = userAccount.username.trim();
+      const existingUser = state.users.find(
+        (u) =>
+          (u.role === "Household Leader" &&
+            u.linked_entity_id === targetHouseholdId) ||
+          u.username.toLowerCase() === cleanUsername.toLowerCase(),
+      );
+
+      if (existingUser) {
+        const updatePayload: Record<string, unknown> = {
+          username: cleanUsername,
+          displayName: householdData.householdLeaderName,
+          linked_entity_id: targetHouseholdId,
+          role: "Household Leader",
+        };
+        if (userAccount.password && userAccount.password.trim()) {
+          updatePayload.password_hash = await hashPassword(
+            userAccount.password.trim(),
+          );
+          updatePayload.failed_login_attempts = 0;
+          updatePayload.account_locked_until = null;
+        }
+        const { error } = await supabase
+          .from("users")
+          .update(updatePayload)
+          .eq("id", existingUser.id);
+        if (error)
+          throw new Error(`Failed to update user account: ${error.message}`);
+      } else {
+        const passwordToHash = userAccount.password?.trim() || "household123";
+        const password_hash = await hashPassword(passwordToHash);
+        const { error } = await supabase.from("users").insert([
+          {
+            username: cleanUsername,
+            password_hash,
+            role: "Household Leader" as const,
+            linked_entity_id: targetHouseholdId,
+            displayName: householdData.householdLeaderName,
+          },
+        ]);
+        if (error)
+          throw new Error(`Failed to create user account: ${error.message}`);
+      }
+    }
+
+    await refreshData();
+  };
+
+  const savePurokWithUser = async (
+    purokData: Omit<Purok, "id">,
+    userAccount?: { username: string; password?: string },
+    existingPurokId?: number,
+  ) => {
+    let targetPurokId = existingPurokId;
+    if (existingPurokId) {
+      const { error } = await supabase
+        .from("puroks")
+        .update(purokData)
+        .eq("id", existingPurokId);
+      if (error) throw new Error(`Failed to update purok: ${error.message}`);
+    } else {
+      const { data: inserted, error } = await supabase
+        .from("puroks")
+        .insert([purokData])
+        .select()
+        .single();
+      if (error || !inserted) {
+        throw new Error(
+          `Failed to create purok: ${error?.message || "Unknown error"}`,
+        );
+      }
+      targetPurokId = inserted.id;
+    }
+
+    if (targetPurokId && userAccount && userAccount.username.trim()) {
+      const cleanUsername = userAccount.username.trim();
+      const existingUser = state.users.find(
+        (u) =>
+          (u.role === "Purok Leader" && u.linked_entity_id === targetPurokId) ||
+          u.username.toLowerCase() === cleanUsername.toLowerCase(),
+      );
+
+      if (existingUser) {
+        const updatePayload: Record<string, unknown> = {
+          username: cleanUsername,
+          displayName: purokData.purokLeaderName,
+          linked_entity_id: targetPurokId,
+          role: "Purok Leader",
+        };
+        if (userAccount.password && userAccount.password.trim()) {
+          updatePayload.password_hash = await hashPassword(
+            userAccount.password.trim(),
+          );
+          updatePayload.failed_login_attempts = 0;
+          updatePayload.account_locked_until = null;
+        }
+        const { error } = await supabase
+          .from("users")
+          .update(updatePayload)
+          .eq("id", existingUser.id);
+        if (error)
+          throw new Error(`Failed to update user account: ${error.message}`);
+      } else {
+        const passwordToHash = userAccount.password?.trim() || "purok123";
+        const password_hash = await hashPassword(passwordToHash);
+        const { error } = await supabase.from("users").insert([
+          {
+            username: cleanUsername,
+            password_hash,
+            role: "Purok Leader" as const,
+            linked_entity_id: targetPurokId,
+            displayName: purokData.purokLeaderName,
+          },
+        ]);
+        if (error)
+          throw new Error(`Failed to create user account: ${error.message}`);
+      }
+    }
+
+    await refreshData();
+  };
+
+  const savePendingDuplicates = (duplicates: PendingDuplicate[]) => {
+    localStorage.setItem(PENDING_DUPLICATES_KEY, JSON.stringify(duplicates));
+    setState((prev) => ({ ...prev, pendingDuplicates: duplicates }));
+  };
+
+  const bulkImport = async (data: DataSet): Promise<ImportResult> => {
+    const [barangayResult, purokResult, householdResult, memberResult] =
+      await Promise.all([
+        fetchAllRows((from, to) =>
+          supabase.from("barangays").select("*").range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          supabase.from("puroks").select("*").range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          supabase.from("households").select("*").range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          supabase.from("members").select("*").range(from, to),
+        ),
+      ]);
+
+    const existingBarangays = barangayResult;
+    const existingPuroks = purokResult;
+    const existingHouseholds = householdResult;
+    const existingMembers = memberResult;
+    const normalize = (value: string) => value.trim().toLocaleLowerCase();
+
+    // Insert only missing records, preserving the existing hierarchy and residents.
     const bIdMap = new Map<number, number>();
     for (const b of data.barangays) {
+      const existing = existingBarangays.find(
+        (item) => normalize(item.name) === normalize(b.name),
+      );
+      if (existing) {
+        bIdMap.set(b.id, existing.id);
+        continue;
+      }
       const { data: inserted, error } = await supabase
         .from("barangays")
         .insert([{ name: b.name, barangayCaptainName: b.barangayCaptainName }])
         .select()
         .single();
-      if (error) throw new Error(`Failed to insert barangay "${b.name}": ${error.message}`);
+      if (error)
+        throw new Error(
+          `Failed to insert barangay "${b.name}": ${error.message}`,
+        );
       bIdMap.set(b.id, inserted.id);
     }
 
-    // 3. Insert Puroks and map IDs
     const pIdMap = new Map<number, number>();
     for (const p of data.puroks) {
       const newBId = bIdMap.get(p.barangayId);
       if (!newBId) continue;
+      const existing = existingPuroks.find(
+        (item) =>
+          item.barangayId === newBId &&
+          normalize(item.name) === normalize(p.name),
+      );
+      if (existing) {
+        pIdMap.set(p.id, existing.id);
+        continue;
+      }
       const { data: inserted, error } = await supabase
         .from("puroks")
-        .insert([{ barangayId: newBId, name: p.name, purokLeaderName: p.purokLeaderName }])
+        .insert([
+          {
+            barangayId: newBId,
+            name: p.name,
+            purokLeaderName: p.purokLeaderName,
+          },
+        ])
         .select()
         .single();
-      if (error) throw new Error(`Failed to insert purok "${p.name}": ${error.message}`);
+      if (error)
+        throw new Error(`Failed to insert purok "${p.name}": ${error.message}`);
       pIdMap.set(p.id, inserted.id);
     }
 
-    // 4. Insert Households and map IDs
     const hIdMap = new Map<number, number>();
     for (const h of data.households) {
       const newPId = pIdMap.get(h.purokId);
       if (!newPId) continue;
+      const existing = existingHouseholds.find(
+        (item) =>
+          item.purokId === newPId &&
+          normalize(item.householdLeaderName) ===
+            normalize(h.householdLeaderName) &&
+          normalize(item.address) === normalize(h.address),
+      );
+      if (existing) {
+        hIdMap.set(h.id, existing.id);
+        continue;
+      }
       const { data: inserted, error } = await supabase
         .from("households")
-        .insert([{ purokId: newPId, householdLeaderName: h.householdLeaderName, address: h.address }])
+        .insert([
+          {
+            purokId: newPId,
+            barangayId: newBId,
+            householdLeaderName: h.householdLeaderName,
+            address: h.address,
+          },
+        ])
         .select()
         .single();
-      if (error) throw new Error(`Failed to insert household "${h.householdLeaderName}": ${error.message}`);
+      if (error)
+        throw new Error(
+          `Failed to insert household "${h.householdLeaderName}": ${error.message}`,
+        );
       hIdMap.set(h.id, inserted.id);
     }
 
-    // 5. Insert Members in chunks
-    const mappedMembers = [];
+    const existingByDuplicateKey = new Map(
+      existingMembers.map((member) => [duplicateKey(member), member]),
+    );
+    const seenImportKeys = new Set<string>();
+    const mappedMembers: Omit<Member, "id">[] = [];
+    const duplicates: PendingDuplicate[] = [];
     for (const m of data.members) {
       const newHId = hIdMap.get(m.householdId);
       if (!newHId) continue;
-      mappedMembers.push({
+      const originalHousehold = data.households.find((h) => h.id === m.householdId);
+      const originalPurok = originalHousehold ? data.puroks.find((p) => p.id === originalHousehold.purokId) : null;
+      const mappedBarangayId = originalPurok ? bIdMap.get(originalPurok.barangayId) : undefined;
+
+      const mappedMember = {
         householdId: newHId,
+        barangayId: mappedBarangayId,
         lastName: m.lastName,
         firstName: m.firstName,
         middleName: m.middleName,
@@ -241,17 +603,87 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         pwd: m.pwd,
         ip: m.ip,
         remarks: m.remarks,
-      });
+      };
+      const key = duplicateKey(mappedMember);
+      const existing = existingByDuplicateKey.get(key);
+      if (existing || seenImportKeys.has(key)) {
+        duplicates.push({
+          id: crypto.randomUUID(),
+          importedMember: mappedMember,
+          existingMemberId: existing?.id ?? 0,
+        });
+        continue;
+      }
+      seenImportKeys.add(key);
+      mappedMembers.push(mappedMember);
     }
 
     const chunkSize = 500;
     for (let i = 0; i < mappedMembers.length; i += chunkSize) {
       const chunk = mappedMembers.slice(i, i + chunkSize);
       const { error } = await supabase.from("members").insert(chunk);
-      if (error) throw new Error(`Failed to insert members (batch ${Math.floor(i / chunkSize) + 1}): ${error.message}`);
+      if (error)
+        throw new Error(
+          `Failed to insert members (batch ${Math.floor(i / chunkSize) + 1}): ${error.message}`,
+        );
     }
 
+    if (duplicates.length > 0) {
+      savePendingDuplicates([...loadPendingDuplicates(), ...duplicates]);
+    }
     await refreshData();
+    return {
+      importedMembers: mappedMembers.length,
+      duplicateMembers: duplicates.length,
+    };
+  };
+
+  const approveDuplicate = async (id: string) => {
+    const pending = state.pendingDuplicates.find(
+      (duplicate) => duplicate.id === id,
+    );
+    if (!pending) return;
+    const { error } = await supabase
+      .from("members")
+      .insert([pending.importedMember]);
+    if (error) throw new Error(`Could not approve member: ${error.message}`);
+    savePendingDuplicates(
+      state.pendingDuplicates.filter((duplicate) => duplicate.id !== id),
+    );
+    await refreshData();
+  };
+
+  const dismissDuplicate = (id: string) => {
+    savePendingDuplicates(
+      state.pendingDuplicates.filter((duplicate) => duplicate.id !== id),
+    );
+  };
+
+  const approveAllDuplicates = async () => {
+    let remaining = state.pendingDuplicates;
+    const chunkSize = 500;
+    for (
+      let index = 0;
+      index < state.pendingDuplicates.length;
+      index += chunkSize
+    ) {
+      const chunk = state.pendingDuplicates.slice(index, index + chunkSize);
+      const { error } = await supabase
+        .from("members")
+        .insert(chunk.map((duplicate) => duplicate.importedMember));
+      if (error)
+        throw new Error(`Could not approve duplicates: ${error.message}`);
+      const approvedIds = new Set(chunk.map((duplicate) => duplicate.id));
+      remaining = remaining.filter(
+        (duplicate) => !approvedIds.has(duplicate.id),
+      );
+      savePendingDuplicates(remaining);
+    }
+    await refreshData();
+  };
+
+  const dismissAllDuplicates = () => {
+    savePendingDuplicates([]);
   };
 
   const value: StoreContextValue = {
@@ -264,14 +696,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addHousehold,
     updateHousehold,
     deleteHousehold,
+    saveHouseholdWithUser,
     addPurok,
     updatePurok,
     deletePurok,
+    savePurokWithUser,
     addUser,
     deleteUser,
     refreshData,
     bulkImport,
+    approveDuplicate,
+    dismissDuplicate,
+    approveAllDuplicates,
+    dismissAllDuplicates,
   };
 
-  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+  return (
+    <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
+  );
 }

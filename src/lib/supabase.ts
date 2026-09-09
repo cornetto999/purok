@@ -4,19 +4,26 @@ import { type Database } from "./types"; // We will create this
 
 import WebSocket from "isomorphic-ws";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
+const env =
+  typeof import.meta !== "undefined" && import.meta.env
+    ? import.meta.env
+    : typeof process !== "undefined"
+      ? (process.env as Record<string, string | undefined>)
+      : {};
+
+const supabaseUrl = env.VITE_SUPABASE_URL;
+const supabaseAnonKey = env.VITE_SUPABASE_SERVICE_ROLE_KEY || env.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.warn("Supabase credentials missing. Check your .env file.");
 }
 
 export const supabase = createClient(
-  supabaseUrl || "",
-  supabaseAnonKey || "",
+  supabaseUrl || "https://placeholder.supabase.co",
+  supabaseAnonKey || "placeholder-key",
   {
     realtime: {
       transport: WebSocket,
     },
-  }
+  },
 );
