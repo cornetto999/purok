@@ -3,7 +3,7 @@ import { n as require_jsx_runtime, r as require_react, t as QueryClientProvider 
 import { t as StoreProvider } from "./store-D6_VlWDf.mjs";
 import { c as HeadContent, d as createRouter, f as Outlet, g as Link, h as createRootRouteWithContext, m as createFileRoute, p as lazyRouteComponent, s as Scripts, v as useRouter } from "../_libs/@tanstack/react-router+[...].mjs";
 import { t as QueryClient } from "../_libs/tanstack__query-core.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/router-DpnEAsKP.js
+//#region node_modules/.nitro/vite/services/ssr/assets/router-CKF9mU3u.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_runtime = require_jsx_runtime();
 var styles_default = "/assets/styles-DD62u8IJ.css";
@@ -135,8 +135,17 @@ var Route$9 = createRootRouteWithContext()({
 			},
 			{
 				rel: "icon",
+				href: "/favicon.svg",
+				type: "image/svg+xml"
+			},
+			{
+				rel: "icon",
 				href: "/favicon.ico",
 				type: "image/x-icon"
+			},
+			{
+				rel: "apple-touch-icon",
+				href: "/apple-touch-icon.png"
 			},
 			{
 				rel: "stylesheet",

@@ -1,4 +1,4 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/_tanstack-start-manifest_v-BJDn9pdy.js
+//#region node_modules/.nitro/vite/services/ssr/assets/_tanstack-start-manifest_v-Cowj2Jlt.js
 var tsrStartManifest = () => ({ routes: {
 	__root__: {
 		filePath: "/Users/francisjakeroaya/purok/src/routes/__root.tsx",
@@ -8,7 +8,7 @@ var tsrStartManifest = () => ({ routes: {
 			"/login"
 		],
 		preloads: [
-			"/assets/index-B5XvqmYS.js",
+			"/assets/index-CGaInrs6.js",
 			"/assets/store-DNibmllU.js",
 			"/assets/Match-GiB7H7HW.js",
 			"/assets/useNavigate-DLRn5mwr.js"
@@ -16,7 +16,7 @@ var tsrStartManifest = () => ({ routes: {
 		scripts: [{ attrs: {
 			type: "module",
 			async: !0,
-			src: "/assets/index-B5XvqmYS.js"
+			src: "/assets/index-CGaInrs6.js"
 		} }]
 	},
 	"/": {
