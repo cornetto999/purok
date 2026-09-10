@@ -151,10 +151,6 @@ export function PurokLeaderSearchClaim({
       try {
         let qb = supabase.from("members").select("*");
 
-        if (leaderBarangay?.id) {
-          qb = qb.eq("barangayId", leaderBarangay.id);
-        }
-
         // MUST filter for records where purok_id IS NULL OR records that are flagged for review
         if (activeFilterTab === "unassigned") {
           qb = qb.or("purok_id.is.null,code.ilike.%unassigned%");

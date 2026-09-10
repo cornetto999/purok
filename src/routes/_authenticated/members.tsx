@@ -11,6 +11,7 @@ import { FastEditPurokModal } from "@/components/fast-edit-modal";
 import { EditAndAssignModal } from "@/components/edit-and-assign-modal";
 import { ModalShell } from "@/components/modal-shell";
 import { BARANGAYS_SEED_DATA } from "@/lib/barangay-data";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/members")({
   head: () => ({
@@ -191,10 +192,7 @@ export function MembersPage({
       );
       return state.members.filter((member) => {
         const assignedByHousehold = myHouseholdIds.has(member.householdId);
-        const assignedDirectly =
-          member.barangayId === leaderPurok?.barangayId &&
-          member.code.trim().toLowerCase() ===
-            leaderPurok?.name.trim().toLowerCase();
+        const assignedDirectly = member.purok_id === leaderPurokId;
         return assignedByHousehold || assignedDirectly;
       });
     }
@@ -238,7 +236,7 @@ export function MembersPage({
         purok.barangayId !== Number(barangayFilter)
       )
         return false;
-      if (purokFilter !== "all" && household.purokId !== Number(purokFilter))
+      if (purokFilter !== "all" && household?.purokId !== Number(purokFilter))
         return false;
       if (sectorFilter === "SC" && !m.sc) return false;
       if (sectorFilter === "PWD" && !m.pwd) return false;
@@ -805,6 +803,7 @@ export function MembersPage({
                 if (selected?.id === modal.data.id) {
                   setSelected({ ...selected, ...updatedData });
                 }
+                toast.success(`${memberFullName(modal.data)} successfully claimed and assigned to household!`);
               }}
               onCreateHousehold={createHouseholdForLeader}
               onClose={() => setModal(null)}

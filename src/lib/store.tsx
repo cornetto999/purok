@@ -287,10 +287,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // CRUD Implementations
   const addMember = async (data: Omit<Member, "id">) => {
     const precinctVal = data.precinct || data.pn || "";
+    // Normalize team field: DB uses snake_case team_id; drop camelCase teamId
+    // Drop barangayId as it's not in the DB schema
+    const { teamId: _teamId, barangayId, ...rest } = data as typeof data & { teamId?: number | null, barangayId?: number };
     const payload = {
-      ...data,
+      ...rest,
       precinct: precinctVal,
       pn: precinctVal,
+      team_id: rest.team_id ?? _teamId ?? null,
     };
     const { error } = await supabase.from("members").insert([payload]);
     if (error) throw new Error(`Could not add member: ${error.message}`);
@@ -300,11 +304,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     id: number,
     data: Partial<Omit<Member, "id">>,
   ) => {
-    const patch = { ...data };
-    if (patch.precinct !== undefined || patch.pn !== undefined) {
-      const precinctVal = patch.precinct ?? patch.pn ?? "";
+    // Normalize team field: DB uses snake_case team_id; drop camelCase teamId
+    // Drop barangayId as it's not in the DB schema
+    const { teamId: _teamId, barangayId, ...rest } = data as typeof data & { teamId?: number | null, barangayId?: number };
+    const patch: Record<string, unknown> = { ...rest };
+    if (rest.precinct !== undefined || rest.pn !== undefined) {
+      const precinctVal = rest.precinct ?? rest.pn ?? "";
       patch.precinct = precinctVal;
       patch.pn = precinctVal;
+    }
+    // If teamId was supplied (camelCase), map it to team_id
+    if (_teamId !== undefined) {
+      patch.team_id = _teamId;
     }
     const { error } = await supabase.from("members").update(patch).eq("id", id);
     if (error) throw new Error(`Could not save member: ${error.message}`);
@@ -332,16 +343,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   };
 
   const addHousehold = async (data: Omit<Household, "id">) => {
-    const { error } = await supabase.from("households").insert([data]);
+    const { barangayId, ...rest } = data;
+    const { error } = await supabase.from("households").insert([rest]);
     if (!error) await refreshData();
   };
   const updateHousehold = async (
     id: number,
     data: Partial<Omit<Household, "id">>,
   ) => {
+    const { barangayId, ...rest } = data;
     const { error } = await supabase
       .from("households")
-      .update(data)
+      .update(rest)
       .eq("id", id);
     if (!error) await refreshData();
   };

@@ -19,6 +19,7 @@ import {
   Sparkles,
   Layers,
   X,
+  AlertCircle,
 } from "lucide-react";
 import type { Household, Member, Purok, Team } from "@/lib/types";
 import {
@@ -110,6 +111,20 @@ export function HouseholdGroupingView({
 
     return result;
   }, [groupedData, searchQuery, teamFilter, sortBy, sortOrder]);
+
+  // ── Limbo Members ────────────────────────────────────────────────────────
+  const limboMembers = useMemo(() => {
+    return members.filter((m) => {
+      const isAssignedToPurok =
+        m.purok_id === purok.id ||
+        (m.code &&
+          purok.name &&
+          m.code.trim().toLowerCase() === purok.name.trim().toLowerCase());
+      if (!isAssignedToPurok) return false;
+      const belongsToPurokHousehold = households.some((h) => h.id === m.householdId);
+      return !belongsToPurokHousehold;
+    });
+  }, [members, purok, households]);
 
   // ── 3. Metrics ─────────────────────────────────────────────────────────────
   const totalHouseholds = groupedData.length;
@@ -696,6 +711,59 @@ export function HouseholdGroupingView({
           </div>
         )}
       </div>
+
+      {/* ── Unassigned Residents in Purok ─────────────────────────────────────── */}
+      {limboMembers.length > 0 && (
+        <div className="mt-8 rounded-2xl border border-amber-200 bg-amber-50 shadow-sm overflow-hidden">
+          <div className="border-b border-amber-200 bg-amber-100/50 px-5 py-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-200 text-amber-700">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-amber-900">
+                  Residents Missing Household Assignment ({limboMembers.length})
+                </h3>
+                <p className="mt-1 text-xs text-amber-700">
+                  These members have been claimed into your Purok but were not assigned as a Household Leader (HL) or Member (HM). They do not belong to any household in the list above. Please click "Edit" to assign them to a household.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="divide-y divide-amber-200/60 p-1">
+            {limboMembers.map((m) => (
+              <div key={m.id} className="flex items-center justify-between p-3 hover:bg-amber-100/30 transition-colors">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2 text-sm font-bold text-amber-950">
+                    {memberFullName(m)}
+                    <span className="rounded bg-amber-200/50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                      Age: {m.age}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] font-medium text-amber-700">
+                    <span>{m.status || "Single"}</span>
+                    {(m.precinct || m.pn) && (
+                      <span className="font-mono">
+                        • Precinct: {m.precinct || m.pn} {m.no ? `#${m.no}` : ""}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {onEditMember && (
+                  <button
+                    type="button"
+                    onClick={() => onEditMember(m)}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-700 shadow-sm hover:bg-amber-50 active:scale-95 transition-all"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Assign to Household
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── JSON Structure Inspection Modal ───────────────────────────────── */}
       {showJsonModal && (

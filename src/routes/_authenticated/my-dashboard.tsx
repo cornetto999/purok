@@ -218,9 +218,10 @@ function PurokLeaderConsole({ session }: { session: Session }) {
 
   // Inline household creation helper for EditAndAssignModal
   const handleCreateHouseholdInline = async (data: Omit<Household, "id">) => {
+    const { barangayId, ...rest } = data;
     const { data: inserted, error } = await supabase
       .from("households")
-      .insert([data])
+      .insert([rest])
       .select()
       .single();
 

@@ -150,7 +150,7 @@ export function EditAndAssignModal({
       await onSave({
         householdId: selectedHouseholdId,
         barangayId: leaderPurok.barangayId,
-        teamId: teamId,
+        team_id: teamId,
         code: leaderPurok.name, // Updated code reflects assignment to this Purok
         is_household_leader: householdRole === "HL",
         is_household_member: householdRole === "HM",

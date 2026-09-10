@@ -131,6 +131,11 @@ export function ClaimEditOrganizeModal({
     e.preventDefault();
     setErrorMessage("");
 
+    if (!role) {
+      setErrorMessage("Please select whether this member is a Household Leader (HL) or Household Member (HM).");
+      return;
+    }
+
     if (role === "HL" && !householdAddress.trim()) {
       setErrorMessage("Please enter a Household Address for the new household.");
       return;
@@ -157,9 +162,9 @@ export function ClaimEditOrganizeModal({
       if (role === "HL") {
         const fullLeaderName = memberFullName(member);
 
+        // Note: households table only has purokId, householdLeaderName, address — no barangayId column
         const newHouseholdPayload = {
           purokId: leaderPurok.id,
-          barangayId: leaderPurok.barangayId,
           householdLeaderName: fullLeaderName,
           address: householdAddress.trim(),
         };
@@ -187,11 +192,9 @@ export function ClaimEditOrganizeModal({
         householdId: targetHouseholdId,
         purok_id: leaderPurok.id,
         team_id: teamId ? Number(teamId) : null,
-        teamId: teamId ? Number(teamId) : null,
         is_household_leader: role === "HL",
         is_household_member: role === "HM",
         code: leaderPurok.name,
-        barangayId: leaderPurok.barangayId,
         age: Number(age) || 0,
         religion: finalReligion,
         status,

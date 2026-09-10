@@ -712,7 +712,7 @@ function FamilyMemberModal({
         // Strict relational binding:
         householdId: household.id,
         barangayId: household.barangayId || purok?.barangayId || 0,
-        teamId: initial?.teamId !== undefined ? initial.teamId : defaultTeamId,
+        team_id: initial?.teamId !== undefined ? initial.teamId : defaultTeamId,
         code: purok?.name || initial?.code || "",
         address: household.address,
 
