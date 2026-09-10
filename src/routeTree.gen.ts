@@ -15,6 +15,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedDuplicateMembersRouteImport } from './routes/_authenticated/duplicate-members'
 import { Route as AuthenticatedHouseholdsRouteImport } from './routes/_authenticated/households'
+import { Route as AuthenticatedMemberListRouteImport } from './routes/_authenticated/member-list'
 import { Route as AuthenticatedMembersRouteImport } from './routes/_authenticated/members'
 import { Route as AuthenticatedMyDashboardRouteImport } from './routes/_authenticated/my-dashboard'
 import { Route as AuthenticatedPurokLeadersRouteImport } from './routes/_authenticated/purok-leaders'
@@ -52,6 +53,11 @@ const AuthenticatedDuplicateMembersRoute =
 const AuthenticatedHouseholdsRoute = AuthenticatedHouseholdsRouteImport.update({
   id: '/households',
   path: '/households',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedMemberListRoute = AuthenticatedMemberListRouteImport.update({
+  id: '/member-list',
+  path: '/member-list',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedMembersRoute = AuthenticatedMembersRouteImport.update({
@@ -103,6 +109,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/duplicate-members': typeof AuthenticatedDuplicateMembersRoute
   '/households': typeof AuthenticatedHouseholdsRoute
+  '/member-list': typeof AuthenticatedMemberListRoute
   '/members': typeof AuthenticatedMembersRoute
   '/my-dashboard': typeof AuthenticatedMyDashboardRoute
   '/purok-leaders': typeof AuthenticatedPurokLeadersRoute
@@ -118,6 +125,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/duplicate-members': typeof AuthenticatedDuplicateMembersRoute
   '/households': typeof AuthenticatedHouseholdsRoute
+  '/member-list': typeof AuthenticatedMemberListRoute
   '/members': typeof AuthenticatedMembersRoute
   '/my-dashboard': typeof AuthenticatedMyDashboardRoute
   '/purok-leaders': typeof AuthenticatedPurokLeadersRoute
@@ -135,6 +143,7 @@ export interface FileRoutesById {
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/duplicate-members': typeof AuthenticatedDuplicateMembersRoute
   '/_authenticated/households': typeof AuthenticatedHouseholdsRoute
+  '/_authenticated/member-list': typeof AuthenticatedMemberListRoute
   '/_authenticated/members': typeof AuthenticatedMembersRoute
   '/_authenticated/my-dashboard': typeof AuthenticatedMyDashboardRoute
   '/_authenticated/purok-leaders': typeof AuthenticatedPurokLeadersRoute
@@ -152,6 +161,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/duplicate-members'
     | '/households'
+    | '/member-list'
     | '/members'
     | '/my-dashboard'
     | '/purok-leaders'
@@ -167,6 +177,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/duplicate-members'
     | '/households'
+    | '/member-list'
     | '/members'
     | '/my-dashboard'
     | '/purok-leaders'
@@ -183,6 +194,7 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard'
     | '/_authenticated/duplicate-members'
     | '/_authenticated/households'
+    | '/_authenticated/member-list'
     | '/_authenticated/members'
     | '/_authenticated/my-dashboard'
     | '/_authenticated/purok-leaders'
@@ -241,6 +253,13 @@ declare module '@tanstack/react-router' {
       path: '/households'
       fullPath: '/households'
       preLoaderRoute: typeof AuthenticatedHouseholdsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/member-list': {
+      id: '/_authenticated/member-list'
+      path: '/member-list'
+      fullPath: '/member-list'
+      preLoaderRoute: typeof AuthenticatedMemberListRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/members': {
@@ -306,6 +325,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedDuplicateMembersRoute: typeof AuthenticatedDuplicateMembersRoute
   AuthenticatedHouseholdsRoute: typeof AuthenticatedHouseholdsRoute
+  AuthenticatedMemberListRoute: typeof AuthenticatedMemberListRoute
   AuthenticatedMembersRoute: typeof AuthenticatedMembersRoute
   AuthenticatedMyDashboardRoute: typeof AuthenticatedMyDashboardRoute
   AuthenticatedPurokLeadersRoute: typeof AuthenticatedPurokLeadersRoute
@@ -320,6 +340,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedDuplicateMembersRoute: AuthenticatedDuplicateMembersRoute,
   AuthenticatedHouseholdsRoute: AuthenticatedHouseholdsRoute,
+  AuthenticatedMemberListRoute: AuthenticatedMemberListRoute,
   AuthenticatedMembersRoute: AuthenticatedMembersRoute,
   AuthenticatedMyDashboardRoute: AuthenticatedMyDashboardRoute,
   AuthenticatedPurokLeadersRoute: AuthenticatedPurokLeadersRoute,

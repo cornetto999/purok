@@ -34,6 +34,87 @@ interface RawEntryRow {
 
 const str = (v: unknown): string => String(v ?? "").trim();
 const hasValue = (v: unknown): boolean => str(v) !== "";
+const normalizedHeader = (header: string): string =>
+  header.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+export function findPrecinct(norm: Record<string, string>, raw: Record<string, unknown>): string {
+  // 1. Direct candidate normalized names:
+  const directMatches = [
+    "PRECINCTNO",
+    "PRECINCT",
+    "PRECINCTNUMBER",
+    "PRECINCTID",
+    "PN",
+    "PRECNO",
+    "PCTNO",
+    "PRCNTNO",
+    "VOTERSPRECINCT",
+    "VOTERPRECINCT",
+    "CLUSTEREDPRECINCT",
+    "ESTABLISHEDPRECINCT",
+  ];
+  for (const k of directMatches) {
+    if (norm[k]) return norm[k];
+  }
+
+  // 2. Normalized key fuzzy check:
+  for (const [k, v] of Object.entries(norm)) {
+    if (!v) continue;
+    if (k.includes("PRECINCT") || k.includes("PRCNT") || k === "PN" || k.startsWith("PCT") || k.startsWith("PREC")) {
+      return v;
+    }
+  }
+
+  // 3. Raw keys check (case-insensitive):
+  for (const [rawKey, rawVal] of Object.entries(raw)) {
+    const v = str(rawVal);
+    if (!v) continue;
+    const clean = rawKey.trim().toLowerCase();
+    if (clean.includes("precinct") || clean.includes("prcnt") || clean.startsWith("pct") || clean === "pn" || clean.startsWith("prec")) {
+      return v;
+    }
+  }
+
+  return "";
+}
+
+export function findSerialNo(norm: Record<string, string>, raw: Record<string, unknown>): string {
+  // Direct candidate normalized names:
+  const directMatches = [
+    "NO",
+    "SN",
+    "SERIALNO",
+    "SERIALNUMBER",
+    "VOTERNO",
+    "VOTERNUMBER",
+    "SEQNO",
+    "SEQUENCENO",
+  ];
+  for (const k of directMatches) {
+    if (norm[k]) return norm[k];
+  }
+
+  // Raw keys check:
+  for (const [rawKey, rawVal] of Object.entries(raw)) {
+    const v = str(rawVal);
+    if (!v) continue;
+    const clean = rawKey.trim().toLowerCase();
+    if (clean === "no" || clean === "no." || clean === "#" || clean === "sn" || clean === "s.n." || clean.includes("serial") || clean.includes("voter no")) {
+      return v;
+    }
+  }
+
+  return "";
+}
+
+function readColumn(
+  row: Record<string, string>,
+  ...headers: string[]
+): string {
+  return headers
+    .map((header) => row[normalizedHeader(header)] ?? "")
+    .find((value) => value !== "") ?? "";
+}
 
 export function isExcelFile(file: File): boolean {
   const name = file.name.toLowerCase();
@@ -124,9 +205,33 @@ export async function processSingleFile(
     throw new Error("Missing ENTRY sheet");
   }
 
+  const sheet = book.Sheets[entrySheetName]!;
+  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
+
+  // Dynamically detect header row in case of top title/banner rows
+  let headerRowIndex = 0;
+  for (let r = 0; r < Math.min(10, aoa.length); r++) {
+    const rowCells = (aoa[r] || []).map((c) => String(c ?? "").trim().toUpperCase());
+    const hasVoterHeader = rowCells.some((c) =>
+      c.includes("PRECINCT") ||
+      c.includes("LAST") ||
+      c.includes("FIRST") ||
+      c === "PN" ||
+      c === "SN" ||
+      c === "NO" ||
+      c === "NO." ||
+      c.includes("VOTER") ||
+      c.includes("NAME")
+    );
+    if (hasVoterHeader) {
+      headerRowIndex = r;
+      break;
+    }
+  }
+
   const rawJson = XLSX.utils.sheet_to_json<Record<string, unknown>>(
-    book.Sheets[entrySheetName]!,
-    { defval: "" },
+    sheet,
+    { range: headerRowIndex, defval: "" },
   );
 
   if (rawJson.length === 0) {
@@ -136,20 +241,20 @@ export async function processSingleFile(
   const rows: RawEntryRow[] = rawJson.map((raw) => {
     const norm: Record<string, string> = {};
     for (const [k, v] of Object.entries(raw)) {
-      norm[k.toUpperCase().trim()] = str(v);
+      norm[normalizedHeader(k)] = str(v);
     }
     return {
-      PN: norm["PN"] ?? "",
-      SN: norm["SN"] ?? "",
-      LAST: norm["LAST"] ?? "",
-      FIRST: norm["FIRST"] ?? "",
-      MIDDLE: norm["MIDDLE"] ?? "",
-      ADDRESS: norm["ADDRESS"] ?? "",
-      CODE: norm["CODE"] ?? "",
-      PL: norm["PL"] ?? "",
-      HL: norm["HL"] ?? "",
-      HM: norm["HM"] ?? "",
-      REMARKS: norm["REMARKS"] ?? "",
+      PN: findPrecinct(norm, raw),
+      SN: findSerialNo(norm, raw),
+      LAST: readColumn(norm, "LAST", "Last Name", "Surname", "Family Name", "Apelyido"),
+      FIRST: readColumn(norm, "FIRST", "First Name", "Given Name"),
+      MIDDLE: readColumn(norm, "MIDDLE", "Middle Name", "MI", "Middle Initial"),
+      ADDRESS: readColumn(norm, "ADDRESS", "Voter Address", "Residence"),
+      CODE: readColumn(norm, "CODE", "Purok", "Zone", "Sitio"),
+      PL: readColumn(norm, "PL"),
+      HL: readColumn(norm, "HL"),
+      HM: readColumn(norm, "HM"),
+      REMARKS: readColumn(norm, "REMARKS", "Remarks / Notes", "Remarks", "Notes"),
     };
   });
 
@@ -263,10 +368,10 @@ export async function processSingleFile(
   // Pass 1: Identify all HL rows to insert
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (!row.LAST && !row.FIRST) continue;
+    if (!row || (!row.LAST && !row.FIRST)) continue;
 
     const normCode = normalizePurokName(row.CODE);
-    const pId = purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0];
+    const pId = purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0] || 0;
 
     if (hasValue(row.HL)) {
       const fullName = [row.LAST, row.FIRST, row.MIDDLE].filter(Boolean);
@@ -303,7 +408,10 @@ export async function processSingleFile(
     }
 
     insertedHouseholds.forEach((h, idx) => {
-      rowIndexToHouseholdId.set(householdInsertBatch[idx].rowIndex, h.id);
+      const bItem = householdInsertBatch[idx];
+      if (bItem) {
+        rowIndexToHouseholdId.set(bItem.rowIndex, h.id);
+      }
     });
   }
 
@@ -312,30 +420,30 @@ export async function processSingleFile(
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (!row.LAST && !row.FIRST) continue;
+    if (!row || (!row.LAST && !row.FIRST)) continue;
 
     const normCode = normalizePurokName(row.CODE);
-    const pId = purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0];
+    const pId = purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0] || 0;
 
     if (rowIndexToHouseholdId.has(i)) {
       currentActiveHouseholdId = rowIndexToHouseholdId.get(i)!;
-    } else if (!currentActiveHouseholdId) {
+    } else if (!currentActiveHouseholdId && pId) {
       currentActiveHouseholdId = defaultHouseholdPerPurok.get(pId) ?? null;
     }
 
-    const hId = currentActiveHouseholdId || defaultHouseholdPerPurok.get(pId) || 1;
+    const hId = currentActiveHouseholdId || (pId ? defaultHouseholdPerPurok.get(pId) : null) || 1;
 
     memberList.push({
       householdId: hId,
       barangayId,
-      lastName: row.LAST,
-      firstName: row.FIRST,
-      middleName: row.MIDDLE,
-      precinct: row.PN,
-      no: row.SN,
-      pn: row.PN,
+      lastName: row.LAST || "",
+      firstName: row.FIRST || "",
+      middleName: row.MIDDLE || "",
+      precinct: row.PN || "",
+      no: row.SN || "",
+      pn: row.PN || "",
       address: row.ADDRESS || `${normCode}, ${barangayName}`,
-      code: row.CODE,
+      code: row.CODE || "",
       is_purok_leader_indicator: hasValue(row.PL),
       is_household_leader: hasValue(row.HL),
       is_household_member: hasValue(row.HM),
@@ -345,14 +453,59 @@ export async function processSingleFile(
       sc: false,
       pwd: false,
       ip: false,
-      remarks: row.REMARKS,
+      remarks: row.REMARKS || "",
     });
   }
 
-  // Step 5: Commit Members in Chunks
+  // Step 5: Commit Members with smart update / upsert
+  // Fetch existing members in this barangay to avoid duplicates and update missing precinct / no
+  const { data: existingMembers } = await supabase
+    .from("members")
+    .select("id, lastName, firstName, middleName, precinct, no, pn")
+    .eq("barangayId", barangayId);
+
+  const existingMap = new Map<string, { id: number; precinct: string; no: string; pn: string }>();
+  if (existingMembers) {
+    for (const em of existingMembers) {
+      const key = `${em.lastName.trim().toLowerCase()}|${em.firstName.trim().toLowerCase()}`;
+      if (!existingMap.has(key)) {
+        existingMap.set(key, em);
+      }
+    }
+  }
+
+  const toUpdate: { id: number; patch: Partial<Member> }[] = [];
+  const toInsert: Omit<Member, "id">[] = [];
+
+  for (const m of memberList) {
+    const key = `${m.lastName.trim().toLowerCase()}|${m.firstName.trim().toLowerCase()}`;
+    const existing = existingMap.get(key);
+    if (existing) {
+      const patch: Partial<Member> = {};
+      if ((!existing.precinct || existing.precinct === "") && m.precinct) {
+        patch.precinct = m.precinct;
+        patch.pn = m.precinct;
+      }
+      if ((!existing.no || existing.no === "") && m.no) {
+        patch.no = m.no;
+      }
+      if (Object.keys(patch).length > 0) {
+        toUpdate.push({ id: existing.id, patch });
+      }
+    } else {
+      toInsert.push(m);
+    }
+  }
+
+  // Execute updates
+  for (const item of toUpdate) {
+    await supabase.from("members").update(item.patch).eq("id", item.id);
+  }
+
+  // Execute inserts in chunks
   const chunkSize = 500;
-  for (let i = 0; i < memberList.length; i += chunkSize) {
-    const chunk = memberList.slice(i, i + chunkSize);
+  for (let i = 0; i < toInsert.length; i += chunkSize) {
+    const chunk = toInsert.slice(i, i + chunkSize);
     const { error: mInsertErr } = await supabase.from("members").insert(chunk);
     if (mInsertErr) {
       throw new Error(
@@ -399,7 +552,7 @@ export async function processBatchUpload(
       continue;
     }
 
-    onProgress(item.id, { status: "processing", errorMessage: undefined });
+    onProgress(item.id, { status: "processing" });
 
     try {
       const result = await processSingleFile(item);
@@ -421,7 +574,6 @@ export async function processBatchUpload(
         householdCount: result.householdCount,
         purokCount: result.purokCount,
         rowCount: result.memberCount,
-        errorMessage: undefined,
       });
     } catch (err) {
       failedCount++;

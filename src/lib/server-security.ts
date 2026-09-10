@@ -1,17 +1,22 @@
 import { supabase } from "./supabase";
-import { hashPassword } from "./auth";
-import type { User, SecurityEventType, Session } from "./types";
+import { hashPassword, type Session } from "./auth";
+import type { User, SecurityEventType } from "./types";
 
 const GOOGLE_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
-const DEFAULT_SECRET_KEY = "6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe"; // Official Google reCAPTCHA v2 test key
+const LOCAL_CAPTCHA_TOKEN = "local-development-verification";
 
 // Helper to get environment variable safely across runtime environments
 function getEnv(key: string): string {
   if (typeof process !== "undefined" && process.env && process.env[key]) {
     return process.env[key]!;
   }
-  if (typeof import.meta !== "undefined" && (import.meta as unknown as { env: Record<string, string> }).env) {
-    return (import.meta as unknown as { env: Record<string, string> }).env[key] || "";
+  if (
+    typeof import.meta !== "undefined" &&
+    (import.meta as unknown as { env: Record<string, string> }).env
+  ) {
+    return (
+      (import.meta as unknown as { env: Record<string, string> }).env[key] || ""
+    );
   }
   return "";
 }
@@ -22,12 +27,15 @@ function getEnv(key: string): string {
 export async function verifyRecaptcha(
   token: string,
   remoteIp?: string,
-): Promise<{ success: boolean; errorCodes?: string[] }> {
+): Promise<{ success: boolean; errorCodes?: string[] | undefined }> {
   if (!token || !token.trim()) {
     return { success: false, errorCodes: ["missing-input-response"] };
   }
 
-  const secret = getEnv("RECAPTCHA_SECRET_KEY") || DEFAULT_SECRET_KEY;
+  const secret = getEnv("RECAPTCHA_SECRET_KEY");
+  if (!secret) {
+    return { success: false, errorCodes: ["missing-input-secret"] };
+  }
 
   try {
     const params = new URLSearchParams();
@@ -113,11 +121,13 @@ export async function handleSecureLogin({
   password,
   captchaToken,
   clientIp,
+  allowLocalCaptcha = false,
 }: {
   username: string;
   password: string;
   captchaToken: string;
   clientIp: string;
+  allowLocalCaptcha?: boolean;
 }): Promise<LoginResult> {
   const trimmedUsername = (username || "").trim();
   const cleanIp = clientIp || "127.0.0.1";
@@ -125,7 +135,10 @@ export async function handleSecureLogin({
   // ─────────────────────────────────────────────────────────────
   // Step A: Verify reCAPTCHA token using Google's verification endpoint
   // ─────────────────────────────────────────────────────────────
-  const captchaResult = await verifyRecaptcha(captchaToken, cleanIp);
+  const captchaResult =
+    allowLocalCaptcha && captchaToken === LOCAL_CAPTCHA_TOKEN
+      ? { success: true }
+      : await verifyRecaptcha(captchaToken, cleanIp);
   if (!captchaResult.success) {
     await logSecurityEvent({
       username: trimmedUsername,
@@ -134,7 +147,8 @@ export async function handleSecureLogin({
     });
     return {
       success: false,
-      error: "CAPTCHA verification failed. Please check 'I'm not a robot' and try again.",
+      error:
+        "CAPTCHA verification failed. Please check 'I'm not a robot' and try again.",
       status: 400,
     };
   }

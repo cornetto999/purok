@@ -67,8 +67,9 @@ export function HouseholdModal({
   const handleBarangayChange = (bId: number) => {
     setSelectedBarangayId(bId);
     const filtered = puroksData.filter((p) => p.barangayId === bId);
-    if (filtered[0]) {
-      setForm((f) => ({ ...f, purokId: filtered[0].id }));
+    const firstPurok = filtered[0];
+    if (firstPurok) {
+      setForm((f) => ({ ...f, purokId: firstPurok.id }));
     }
   };
 
@@ -96,7 +97,7 @@ export function HouseholdModal({
     const userAccount = username.trim()
       ? {
           username: username.trim(),
-          password: password.trim() || undefined,
+          ...(password.trim() ? { password: password.trim() } : {}),
         }
       : undefined;
 
@@ -295,7 +296,7 @@ export function PurokModal({
     const userAccount = username.trim()
       ? {
           username: username.trim(),
-          password: password.trim() || undefined,
+          ...(password.trim() ? { password: password.trim() } : {}),
         }
       : undefined;
 

@@ -10,17 +10,26 @@ import {
   UserCheck,
   Users,
 } from "lucide-react";
-import type { Member, Purok, Barangay, Household, CivilStatus } from "@/lib/types";
+import type {
+  Member,
+  Purok,
+  Barangay,
+  Household,
+  CivilStatus,
+} from "@/lib/types";
 import { memberFullName } from "@/lib/types";
 import { ModalShell, Field, inputCls, FormActions } from "./modal-shell";
+import { useStore } from "@/lib/store";
 
 interface EditAndAssignModalProps {
   member: Member;
   leaderPurok: Purok;
-  leaderBarangay?: Barangay;
+  leaderBarangay?: Barangay | undefined;
   purokHouseholds: Household[];
   onSave: (updatedData: Partial<Member>) => Promise<void> | void;
-  onCreateHousehold?: (data: Omit<Household, "id">) => Promise<Household | void>;
+  onCreateHousehold?: (
+    data: Omit<Household, "id">,
+  ) => Promise<Household | void>;
   onClose: () => void;
 }
 
@@ -44,6 +53,15 @@ export function EditAndAssignModal({
   onCreateHousehold,
   onClose,
 }: EditAndAssignModalProps) {
+  const store = useStore();
+  // Older teams may not have been saved with the current barangay ID. Keep
+  // those teams assignable instead of presenting an empty selector.
+  const teamsForAssignment = store.state.teams.filter(
+    (t) => t.barangay_id === leaderPurok.barangayId,
+  );
+  const availableTeams =
+    teamsForAssignment.length > 0 ? teamsForAssignment : store.state.teams;
+
   // Determine if member is already HL or HM
   const initialRole: "HL" | "HM" = member.is_household_leader ? "HL" : "HM";
 
@@ -53,13 +71,24 @@ export function EditAndAssignModal({
   );
 
   const [selectedHouseholdId, setSelectedHouseholdId] = useState<number>(
-    existingHouseholdInPurok ? existingHouseholdInPurok.id : purokHouseholds[0]?.id ?? 0,
+    existingHouseholdInPurok
+      ? existingHouseholdInPurok.id
+      : (purokHouseholds[0]?.id ?? 0),
   );
+  const householdOptionLabel = (household: Household) =>
+    `${household.householdLeaderName} (${household.address})`;
+  const [householdSearch, setHouseholdSearch] = useState(() => {
+    const selected =
+      existingHouseholdInPurok ?? purokHouseholds[0];
+    return selected ? householdOptionLabel(selected) : "";
+  });
   const [householdRole, setHouseholdRole] = useState<"HL" | "HM">(initialRole);
 
   // Demographics
   const [age, setAge] = useState<number | string>(member.age || "");
-  const [religion, setReligion] = useState<string>(member.religion || "Roman Catholic");
+  const [religion, setReligion] = useState<string>(
+    member.religion || "Roman Catholic",
+  );
   const [customReligion, setCustomReligion] = useState<string>(
     member.religion && !COMMON_RELIGIONS.includes(member.religion)
       ? member.religion
@@ -70,6 +99,7 @@ export function EditAndAssignModal({
   const [pwd, setPwd] = useState<boolean>(member.pwd || false);
   const [ip, setIp] = useState<boolean>(member.ip || false);
   const [remarks, setRemarks] = useState<string>(member.remarks || "");
+  const [teamId, setTeamId] = useState<number | null>(member.teamId || null);
 
   // Inline Create Household state
   const [isCreatingHousehold, setIsCreatingHousehold] = useState(false);
@@ -80,6 +110,7 @@ export function EditAndAssignModal({
   const [savingHh, setSavingHh] = useState(false);
 
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const handleCreateHousehold = async () => {
     if (!onCreateHousehold || !newHhLeader.trim()) return;
@@ -89,10 +120,13 @@ export function EditAndAssignModal({
         purokId: leaderPurok.id,
         barangayId: leaderPurok.barangayId,
         householdLeaderName: newHhLeader.trim(),
-        address: newHhAddress.trim() || `${leaderPurok.name}, ${leaderBarangay?.name || ""}`,
+        address:
+          newHhAddress.trim() ||
+          `${leaderPurok.name}, ${leaderBarangay?.name || ""}`,
       });
       if (created && created.id) {
         setSelectedHouseholdId(created.id);
+        setHouseholdSearch(householdOptionLabel(created));
         setIsCreatingHousehold(false);
       }
     } finally {
@@ -102,16 +136,21 @@ export function EditAndAssignModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedHouseholdId) {
+      setSaveError("Choose a household before saving this member.");
+      return;
+    }
+
     setSaving(true);
+    setSaveError(null);
     try {
       const finalReligion =
-        religion === "Other"
-          ? customReligion.trim() || "Other"
-          : religion;
+        religion === "Other" ? customReligion.trim() || "Other" : religion;
 
       await onSave({
         householdId: selectedHouseholdId,
         barangayId: leaderPurok.barangayId,
+        teamId: teamId,
         code: leaderPurok.name, // Updated code reflects assignment to this Purok
         is_household_leader: householdRole === "HL",
         is_household_member: householdRole === "HM",
@@ -124,6 +163,12 @@ export function EditAndAssignModal({
         remarks: remarks.trim(),
       });
       onClose();
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "Could not save this member. Please try again.",
+      );
     } finally {
       setSaving(false);
     }
@@ -150,32 +195,60 @@ export function EditAndAssignModal({
 
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
-              <span className="text-xs font-semibold text-slate-400">PRECINCT NUMBER</span>
+              <span className="text-xs font-semibold text-slate-400">
+                PRECINCT
+              </span>
               <p className="font-mono font-semibold text-slate-800">
-                {member.pn || "—"}
+                {member.precinct || member.pn || "—"}
               </p>
             </div>
             <div>
-              <span className="text-xs font-semibold text-slate-400">REGISTERED NAME</span>
+              <span className="text-xs font-semibold text-slate-400">
+                VOTER NO. (NO)
+              </span>
+              <p className="font-mono font-semibold text-slate-800">
+                {member.no || "—"}
+              </p>
+            </div>
+            <div>
+              <span className="text-xs font-semibold text-slate-400">
+                REGISTERED NAME
+              </span>
               <p className="font-semibold text-slate-900">
                 {memberFullName(member)}
               </p>
             </div>
             <div>
-              <span className="text-xs font-semibold text-slate-400">FIRST NAME</span>
-              <p className="text-slate-700 font-medium">{member.firstName || "—"}</p>
+              <span className="text-xs font-semibold text-slate-400">
+                FIRST NAME
+              </span>
+              <p className="text-slate-700 font-medium">
+                {member.firstName || "—"}
+              </p>
             </div>
             <div>
-              <span className="text-xs font-semibold text-slate-400">LAST NAME</span>
-              <p className="text-slate-700 font-medium">{member.lastName || "—"}</p>
+              <span className="text-xs font-semibold text-slate-400">
+                LAST NAME
+              </span>
+              <p className="text-slate-700 font-medium">
+                {member.lastName || "—"}
+              </p>
             </div>
             <div>
-              <span className="text-xs font-semibold text-slate-400">MIDDLE NAME</span>
-              <p className="text-slate-700 font-medium">{member.middleName || "—"}</p>
+              <span className="text-xs font-semibold text-slate-400">
+                MIDDLE NAME
+              </span>
+              <p className="text-slate-700 font-medium">
+                {member.middleName || "—"}
+              </p>
             </div>
             <div>
-              <span className="text-xs font-semibold text-slate-400">VOTER ADDRESS</span>
-              <p className="text-slate-700 font-medium truncate">{member.address || "—"}</p>
+              <span className="text-xs font-semibold text-slate-400">
+                VOTER ADDRESS
+              </span>
+              <p className="text-slate-700 font-medium truncate">
+                {member.address || "—"}
+              </p>
             </div>
           </div>
         </div>
@@ -214,24 +287,43 @@ export function EditAndAssignModal({
 
               {!isCreatingHousehold ? (
                 <div className="space-y-1">
-                  <select
+                  <input
+                    type="text"
+                    list="purok-household-options"
                     className={inputCls}
-                    value={selectedHouseholdId}
-                    onChange={(e) => setSelectedHouseholdId(Number(e.target.value))}
-                    required
-                  >
+                    value={householdSearch}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setHouseholdSearch(value);
+                      const selected = purokHouseholds.find(
+                        (household) => householdOptionLabel(household) === value,
+                      );
+                      setSelectedHouseholdId(selected?.id ?? 0);
+                    }}
+                    onBlur={() => {
+                      const selected = purokHouseholds.find(
+                        (household) => household.id === selectedHouseholdId,
+                      );
+                      setHouseholdSearch(
+                        selected ? householdOptionLabel(selected) : "",
+                      );
+                    }}
+                    placeholder="Search or choose a household"
+                    required={purokHouseholds.length > 0}
+                    aria-describedby="household-selection-help"
+                  />
+                  <datalist id="purok-household-options">
                     {purokHouseholds.map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.householdLeaderName} ({h.address})
-                      </option>
+                      <option key={h.id} value={householdOptionLabel(h)} />
                     ))}
-                    {purokHouseholds.length === 0 && (
-                      <option value={0}>No household in this purok yet</option>
-                    )}
-                  </select>
+                  </datalist>
+                  <p id="household-selection-help" className="text-xs text-slate-500">
+                    Start typing a family name or address, then choose a matching household.
+                  </p>
                   {purokHouseholds.length === 0 && (
                     <p className="text-xs text-amber-600">
-                      No households exist in your Purok yet. Please create one below.
+                      No households exist in your Purok yet. Please create one
+                      below.
                     </p>
                   )}
                 </div>
@@ -379,6 +471,23 @@ export function EditAndAssignModal({
                 ))}
               </select>
             </Field>
+
+            <Field label="Team Assignment">
+              <select
+                className={inputCls}
+                value={teamId || ""}
+                onChange={(e) =>
+                  setTeamId(e.target.value ? Number(e.target.value) : null)
+                }
+              >
+                <option value="">Unassigned</option>
+                {availableTeams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.team_name}
+                  </option>
+                ))}
+              </select>
+            </Field>
           </div>
 
           {religion === "Other" && (
@@ -451,10 +560,23 @@ export function EditAndAssignModal({
           </Field>
         </div>
 
+        {saveError && (
+          <p
+            role="alert"
+            className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+          >
+            {saveError}
+          </p>
+        )}
+
         {/* Action Buttons */}
         <FormActions
           onClose={onClose}
-          submitLabel={saving ? "Saving & Assigning…" : `Save & Assign to ${leaderPurok.name}`}
+          submitLabel={
+            saving
+              ? "Saving & Assigning…"
+              : `Save & Assign to ${leaderPurok.name}`
+          }
           submitColor="bg-emerald-600 hover:bg-emerald-700 font-semibold"
         />
       </form>

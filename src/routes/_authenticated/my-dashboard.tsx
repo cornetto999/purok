@@ -7,23 +7,32 @@ import {
   Flag,
   HelpCircle,
   Home,
+  Layers,
   LogOut,
   MapPin,
   Pencil,
   Plus,
   Search,
   ShieldCheck,
+  Sparkles,
   UserCheck,
   Users,
+  X,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { memberFullName, type Member, type Household, type Purok, type Barangay } from "@/lib/types";
 import { StatCard } from "@/components/stat-card";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from "recharts";
 import { MemberFormModal } from "@/components/member-form-modal";
 import { PurokLeaderSearchClaim } from "@/components/purok-leader-search-claim";
-import { EditAndAssignModal } from "@/components/edit-and-assign-modal";
+import { ClaimEditOrganizeModal } from "@/components/claim-edit-organize-modal";
 import { AddMemberGuardModal } from "@/components/add-member-guard-modal";
+import { HouseholdLeaderDashboard } from "@/components/household-leader-dashboard";
+import { HouseholdGroupingView } from "@/components/household-grouping-view";
+import { HouseholdModal } from "@/components/entity-modals";
 import { supabase } from "@/lib/supabase";
+import type { Session } from "@/lib/auth";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/my-dashboard")({
   head: () => ({
@@ -45,35 +54,62 @@ function sectorBadges(m: Member) {
 
 function MyDashboardPage() {
   const store = useStore();
-  const { state, logout } = store;
+  const { state } = store;
   const navigate = useNavigate();
-  const session = state.session!;
+  const session = state.session;
 
-  // Active navigation tab for Purok Leader
-  const [activeTab, setActiveTab] = useState<"claim" | "roster">("claim");
+  useEffect(() => {
+    if (session?.role === "Admin") {
+      void navigate({ to: "/dashboard" });
+    }
+  }, [session?.role, navigate]);
+
+  if (!session) return null;
+
+  if (session.role === "Household Leader") {
+    return <HouseholdLeaderDashboard session={session} />;
+  }
+
+  return <PurokLeaderConsole session={session} />;
+}
+
+function PurokLeaderConsole({ session }: { session: Session }) {
+  const store = useStore();
+  const { state, logout } = store;
+
+  // Active navigation tab for Purok Leader (Tab 1: My Purok Members vs Tab 2: Search & Claim Database)
+  const [activeTab, setActiveTab] = useState<"my-purok" | "search-claim" | "roster">("my-purok");
+
+  // Track claimed member IDs for optimistic removal from search results
+  const [claimedMemberIds, setClaimedMemberIds] = useState<Set<number>>(new Set());
+
+  // Top Global Search state
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+
+  // Highlight newly claimed/assigned member in Household Grouping View
+  const [newlyClaimedMemberId, setNewlyClaimedMemberId] = useState<number | null>(null);
+
+  // Success alert after claiming & organizing a resident
+  const [claimSuccessAlert, setClaimSuccessAlert] = useState<{
+    name: string;
+    role: string;
+    purok: string;
+  } | null>(null);
 
   // Modals state
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [showAddGuard, setShowAddGuard] = useState(false);
   const [guardInitialQuery, setGuardInitialQuery] = useState("");
   const [showRegisterNewModal, setShowRegisterNewModal] = useState(false);
+  const [showHouseholdModal, setShowHouseholdModal] = useState(false);
+  const [targetHouseholdIdForNewResident, setTargetHouseholdIdForNewResident] = useState<number | undefined>(undefined);
   const [newMemberDefaults, setNewMemberDefaults] = useState<{
     firstName: string;
     lastName: string;
     middleName: string;
   } | null>(null);
 
-  // Household Leader state
-  const [showHhAddMember, setShowHhAddMember] = useState(false);
-
-  useEffect(() => {
-    if (session.role === "Admin") {
-      void navigate({ to: "/dashboard" });
-    }
-  }, [session.role, navigate]);
-
-  const isPurokLeader = session.role === "Purok Leader";
-  const isHouseholdLeader = session.role === "Household Leader";
+  const isPurokLeader = true;
 
   // Identify Purok Leader's specific Purok and Barangay
   const leaderPurok: Purok | undefined = useMemo(() => {
@@ -88,14 +124,11 @@ function MyDashboardPage() {
 
   // Households strictly in this Purok
   const scopedHouseholds = useMemo(() => {
-    if (isPurokLeader && leaderPurok) {
+    if (leaderPurok) {
       return state.households.filter((h) => h.purokId === leaderPurok.id);
     }
-    if (isHouseholdLeader) {
-      return state.households.filter((h) => h.id === session.linkedEntityId);
-    }
     return [];
-  }, [state.households, isPurokLeader, isHouseholdLeader, leaderPurok, session.linkedEntityId]);
+  }, [state.households, leaderPurok]);
 
   // Members currently assigned to this Purok's households
   const scopedMembers = useMemo(() => {
@@ -162,6 +195,27 @@ function MyDashboardPage() {
   const pwdCount = scopedMembers.filter((m) => m.pwd).length;
   const ipCount = scopedMembers.filter((m) => m.ip).length;
 
+  const teamDistributionData = useMemo(() => {
+    if (!isPurokLeader) return [];
+    
+    const teamCounts: Record<string, number> = { Unassigned: 0 };
+    scopedMembers.forEach(m => {
+      if (m.teamId) {
+        const team = state.teams.find(t => t.id === m.teamId);
+        const name = team?.team_name || "Unknown Team";
+        teamCounts[name] = (teamCounts[name] || 0) + 1;
+      } else {
+        teamCounts["Unassigned"] = (teamCounts["Unassigned"] || 0) + 1;
+      }
+    });
+
+    return Object.entries(teamCounts)
+      .filter(([_, count]) => count > 0)
+      .map(([name, count]) => ({ name, value: count }));
+  }, [scopedMembers, state.teams, isPurokLeader]);
+
+  const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#64748b'];
+
   // Inline household creation helper for EditAndAssignModal
   const handleCreateHouseholdInline = async (data: Omit<Household, "id">) => {
     const { data: inserted, error } = await supabase
@@ -174,6 +228,7 @@ function MyDashboardPage() {
       await store.refreshData();
       return inserted as Household;
     }
+    return undefined;
   };
 
   return (
@@ -221,26 +276,22 @@ function MyDashboardPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            {isPurokLeader && (
-              <button
-                onClick={() => {
-                  setGuardInitialQuery("");
-                  setShowAddGuard(true);
-                }}
-                className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-emerald-700 hover:shadow active:scale-95"
-              >
-                <Plus className="h-4 w-4" /> Add New Member
-              </button>
-            )}
-
-            {isHouseholdLeader && (
-              <button
-                onClick={() => setShowHhAddMember(true)}
-                className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
-              >
-                <Plus className="h-4 w-4" /> Add Household Member
-              </button>
-            )}
+            <button
+              onClick={() => {
+                setTargetHouseholdIdForNewResident(undefined);
+                setGuardInitialQuery("");
+                setShowAddGuard(true);
+              }}
+              className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-emerald-700 hover:shadow active:scale-95"
+            >
+              <Plus className="h-4 w-4" /> Add Resident
+            </button>
+            <button
+              onClick={() => setShowHouseholdModal(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-white px-4 py-2 text-xs font-bold text-emerald-900 shadow-sm transition-all hover:bg-emerald-50 active:scale-95"
+            >
+              <Home className="h-4 w-4 text-emerald-700" /> Add Household
+            </button>
           </div>
         </div>
 
@@ -277,158 +328,343 @@ function MyDashboardPage() {
           />
         </div>
 
-        {/* Purok Leader Interface: Tab Switching */}
-        {isPurokLeader && leaderPurok && (
-          <div className="space-y-4">
-            {/* Tab bar */}
-            <div className="flex border-b border-slate-200">
-              <button
-                onClick={() => setActiveTab("claim")}
-                className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-bold transition-all ${
-                  activeTab === "claim"
-                    ? "border-indigo-600 text-indigo-600"
-                    : "border-transparent text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                <Search className="h-4 w-4" />
-                Member Search & Claim
-                <span className="ml-1 rounded-full bg-indigo-100 px-2 py-0.2 text-[11px] font-semibold text-indigo-700">
-                  {barangayMembers.length}
-                </span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab("roster")}
-                className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-bold transition-all ${
-                  activeTab === "roster"
-                    ? "border-emerald-600 text-emerald-600"
-                    : "border-transparent text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                Your Purok Roster
-                <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.2 text-[11px] font-semibold text-emerald-800">
-                  {scopedMembers.length}
-                </span>
-              </button>
+        {/* Members by Team Chart */}
+        {isPurokLeader && leaderPurok && teamDistributionData.length > 0 && (
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">Members by Team</h3>
+            <div className="h-[250px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={teamDistributionData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={90}
+                    paddingAngle={2}
+                    dataKey="value"
+                    stroke="none"
+                  >
+                    {teamDistributionData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <RechartsTooltip 
+                    formatter={(value: number) => [value, "Members"]}
+                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  />
+                  <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                </PieChart>
+              </ResponsiveContainer>
             </div>
+          </div>
+        )}
 
-            {/* Tab 1: Member Search & Claim UI */}
-            {activeTab === "claim" && (
-              <PurokLeaderSearchClaim
-                barangayMembers={barangayMembers}
-                puroks={state.puroks}
-                households={state.households}
-                leaderPurok={leaderPurok}
-                leaderBarangay={leaderBarangay}
-                onEditAndAssign={(member) => setEditingMember(member)}
-                onAddNewMember={(query) => {
-                  setGuardInitialQuery(query || "");
-                  setShowAddGuard(true);
-                }}
-              />
-            )}
+        {/* Purok Leader Interface: Global Search + Two Primary Sections */}
+        {isPurokLeader && leaderPurok && (
+          <div className="space-y-6">
+            {/* ── 1. GLOBAL SEARCH BAR (Prominently featured at the top) ── */}
+            <div className="overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-r from-indigo-50/80 via-white to-slate-50 p-4 shadow-sm transition-all">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex-1">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <label
+                      htmlFor="purok-global-search-input"
+                      className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-indigo-900"
+                    >
+                      <Search className="h-3.5 w-3.5 text-indigo-600" />
+                      Global Search Bar (All Imported Residents & Voters)
+                    </label>
+                    <span className="text-[11px] text-slate-500">
+                      Querying entire database for{" "}
+                      <span className="font-semibold text-slate-700">
+                        {leaderBarangay?.name || "Barangay"}
+                      </span>
+                    </span>
+                  </div>
 
-            {/* Tab 2: Your Purok Claimed Roster (grouped by household) */}
-            {activeTab === "roster" && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900">
-                      Claimed Households in {leaderPurok.name}
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Residents currently registered and living in households within your Purok.
-                    </p>
+                  <div className="relative">
+                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
+                      <Search className="h-4 w-4 text-indigo-500" />
+                    </div>
+                    <input
+                      id="purok-global-search-input"
+                      type="text"
+                      value={globalSearchQuery}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setGlobalSearchQuery(val);
+                        if (activeTab !== "search-claim") {
+                          setActiveTab("search-claim");
+                        }
+                      }}
+                      placeholder="Search database by First Name, Last Name, or Precinct No. (PN)..."
+                      className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-10 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-2xs outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                    {globalSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setGlobalSearchQuery("")}
+                        className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-700"
+                        title="Clear search"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="space-y-4">
-                  {scopedHouseholds.map((h) => {
-                    const hMembers = state.members.filter((m) => m.householdId === h.id);
-                    return (
-                      <div
-                        key={h.id}
-                        className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
-                      >
-                        <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/80 px-4 py-3">
-                          <div className="space-y-0.5">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-slate-900">
-                                {h.householdLeaderName}
-                              </span>
-                              <span className="rounded-full bg-slate-200 px-2 py-0.2 text-[10px] font-bold text-slate-700">
-                                {hMembers.length} member{hMembers.length === 1 ? "" : "s"}
-                              </span>
-                            </div>
-                            <p className="text-xs text-slate-500">{h.address}</p>
-                          </div>
-
-                          <button
-                            onClick={() => {
-                              // Pre-check before adding resident
-                              setGuardInitialQuery("");
-                              setShowAddGuard(true);
-                            }}
-                            className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                          >
-                            <Plus className="h-3.5 w-3.5 text-slate-500" />
-                            Add Resident
-                          </button>
-                        </div>
-
-                        <CompactMemberTable
-                          members={hMembers}
-                          onEditMember={(m) => setEditingMember(m)}
-                        />
-                      </div>
-                    );
-                  })}
-
-                  {scopedHouseholds.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center">
-                      <Home className="mx-auto h-8 w-8 text-slate-400" />
-                      <h4 className="mt-2 text-sm font-semibold text-slate-700">
-                        No households registered yet in {leaderPurok.name}
-                      </h4>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Use the "Member Search & Claim" tab to find residents and assign them to your Purok.
-                      </p>
-                    </div>
-                  )}
+                <div className="flex flex-wrap items-center gap-2 lg:flex-col lg:items-end">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center rounded-lg bg-indigo-100/90 px-3 py-1.5 text-xs font-bold text-indigo-800 border border-indigo-200/60">
+                      {barangayMembers.length} Voters in Database
+                    </span>
+                    <span className="inline-flex items-center rounded-lg bg-amber-100/90 px-3 py-1.5 text-xs font-bold text-amber-800 border border-amber-200/60">
+                      {unassignedBarangayCount} Unassigned / Moveable
+                    </span>
+                  </div>
                 </div>
               </div>
-            )}
-          </div>
-        )}
+            </div>
 
-        {/* Household Leader Flat Table */}
-        {isHouseholdLeader && (
-          <div className="space-y-4">
-            <h2 className="text-sm font-semibold text-slate-700">
-              Household Members ({scopedMembers.length})
-            </h2>
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <CompactMemberTable members={scopedMembers} />
+            {/* ── 2. TWO MAIN TABS (Tab 1: My Purok Members vs Tab 2: Search & Claim Database) ── */}
+            <div className="space-y-4">
+              <div className="flex border-b border-slate-200">
+                {/* Tab 1: My Purok Members (Primary Grouped Household Accordion View) */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("my-purok")}
+                  className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-bold transition-all ${
+                    activeTab === "my-purok"
+                      ? "border-indigo-600 text-indigo-600"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <Layers className="h-4 w-4" />
+                  <span>Tab 1: My Purok Members</span>
+                  <span
+                    className={`ml-1 rounded-full px-2 py-0.2 text-[11px] font-semibold ${
+                      activeTab === "my-purok"
+                        ? "bg-indigo-100 text-indigo-700"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {scopedHouseholds.length} Households · {scopedMembers.length} Members
+                  </span>
+                </button>
+
+                {/* Tab 2: Search & Claim Database */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("search-claim")}
+                  className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-bold transition-all ${
+                    activeTab === "search-claim"
+                      ? "border-indigo-600 text-indigo-600"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <Search className="h-4 w-4" />
+                  <span>Tab 2: Search & Claim Database</span>
+                  <span
+                    className={`ml-1 rounded-full px-2 py-0.2 text-[11px] font-semibold ${
+                      activeTab === "search-claim"
+                        ? "bg-amber-100 text-amber-800"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {globalSearchQuery.trim()
+                      ? "Active Search"
+                      : `${unassignedBarangayCount} Unassigned`}
+                  </span>
+                </button>
+
+                {/* Optional Flat Roster view */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("roster")}
+                  className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-bold transition-all ${
+                    activeTab === "roster"
+                      ? "border-emerald-600 text-emerald-600"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span>Purok Roster (Flat)</span>
+                  <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.2 text-[11px] font-semibold text-emerald-800">
+                    {scopedMembers.length}
+                  </span>
+                </button>
+              </div>
+
+              {/* ── TAB 1: My Purok Members (Expandable Household Grouping View) ── */}
+              {activeTab === "my-purok" && (
+                <div className="space-y-4">
+                  {/* Success Banner when resident was just claimed & organized */}
+                  {claimSuccessAlert && (
+                    <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50/90 p-4 text-emerald-950 shadow-xs animate-in fade-in slide-in-from-top-2">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-white shadow-2xs shrink-0">
+                          <Sparkles className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-emerald-900">
+                            Member Successfully Claimed & Updated!
+                          </p>
+                          <p className="text-xs text-emerald-800">
+                            <span className="font-extrabold">{claimSuccessAlert.name}</span> has been assigned as{" "}
+                            <span className="font-bold underline">{claimSuccessAlert.role}</span> under{" "}
+                            <span className="font-bold">{claimSuccessAlert.purok}</span>.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setClaimSuccessAlert(null)}
+                        className="rounded-lg p-1.5 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                        title="Dismiss notification"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+
+                  <HouseholdGroupingView
+                    purok={leaderPurok}
+                    households={scopedHouseholds}
+                    members={state.members}
+                    teams={state.teams}
+                    highlightMemberId={newlyClaimedMemberId ?? undefined}
+                    onEditMember={(member) => setEditingMember(member)}
+                    onAddResidentToHousehold={(householdId) => {
+                      setTargetHouseholdIdForNewResident(householdId);
+                      setGuardInitialQuery("");
+                      setShowAddGuard(true);
+                    }}
+                    onCreateHousehold={() => setShowHouseholdModal(true)}
+                  />
+                </div>
+              )}
+
+              {/* ── TAB 2: Search & Claim Database ── */}
+              {activeTab === "search-claim" && (
+                <PurokLeaderSearchClaim
+                  barangayMembers={barangayMembers}
+                  puroks={state.puroks}
+                  households={state.households}
+                  leaderPurok={leaderPurok}
+                  leaderBarangay={leaderBarangay}
+                  query={globalSearchQuery}
+                  onQueryChange={(val) => setGlobalSearchQuery(val)}
+                  hideHeroSearch={true}
+                  claimedMemberIds={claimedMemberIds}
+                  onClaimMember={(member) => setEditingMember(member)}
+                  onAddNewMember={(query) => {
+                    setGuardInitialQuery(query || "");
+                    setShowAddGuard(true);
+                  }}
+                />
+              )}
+
+              {/* ── OPTIONAL: Purok Flat Roster ── */}
+              {activeTab === "roster" && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Claimed Households in {leaderPurok.name}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Residents currently registered and living in households within your Purok.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    {scopedHouseholds.map((h) => {
+                      const hMembers = state.members.filter((m) => m.householdId === h.id);
+                      return (
+                        <div
+                          key={h.id}
+                          className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                        >
+                          <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/80 px-4 py-3">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-slate-900">
+                                  {h.householdLeaderName}
+                                </span>
+                                <span className="rounded-full bg-slate-200 px-2 py-0.2 text-[10px] font-bold text-slate-700">
+                                  {hMembers.length} member{hMembers.length === 1 ? "" : "s"}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500">{h.address}</p>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                setTargetHouseholdIdForNewResident(h.id);
+                                setGuardInitialQuery("");
+                                setShowAddGuard(true);
+                              }}
+                              className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              <Plus className="h-3.5 w-3.5 text-slate-500" />
+                              Add Resident
+                            </button>
+                          </div>
+
+                          <CompactMemberTable
+                            members={hMembers}
+                            onEditMember={(m) => setEditingMember(m)}
+                          />
+                        </div>
+                      );
+                    })}
+
+                    {scopedHouseholds.length === 0 && (
+                      <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center">
+                        <Home className="mx-auto h-8 w-8 text-slate-400" />
+                        <h4 className="mt-2 text-sm font-semibold text-slate-700">
+                          No households registered yet in {leaderPurok.name}
+                        </h4>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Use the "Tab 2: Search & Claim Database" tab to locate residents and assign them to your Purok.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
+
       </div>
 
       {/* ── MODALS ── */}
 
-      {/* 1. Edit & Assign Modal (Core Purok Leader Workflow) */}
+      {/* 1. Claim, Edit & Organize Modal (Core Purok Leader Workflow) */}
       {editingMember && leaderPurok && (
-        <EditAndAssignModal
+        <ClaimEditOrganizeModal
           member={editingMember}
           leaderPurok={leaderPurok}
           leaderBarangay={leaderBarangay}
           purokHouseholds={scopedHouseholds}
-          onSave={async (updatedData) => {
-            await store.updateMember(editingMember.id, updatedData);
+          teams={state.teams}
+          onSaveSuccess={(updatedMember, newHousehold) => {
+            setClaimedMemberIds((prev) => new Set(prev).add(updatedMember.id));
+            setNewlyClaimedMemberId(updatedMember.id);
+            setActiveTab("my-purok"); // Auto-switch to Tab 1: My Purok Members
+            toast.success("Member successfully claimed and updated");
+            setClaimSuccessAlert({
+              name: memberFullName(updatedMember),
+              role: updatedMember.is_household_leader
+                ? "Household Leader (HL)"
+                : "Household Member (HM)",
+              purok: leaderPurok.name,
+            });
             setEditingMember(null);
           }}
-          onCreateHousehold={handleCreateHouseholdInline}
           onClose={() => setEditingMember(null)}
         />
       )}
@@ -460,17 +696,31 @@ function MyDashboardPage() {
           householdsData={scopedHouseholds}
           barangaysData={leaderBarangay ? [leaderBarangay] : state.barangays}
           puroksData={[leaderPurok]}
-          defaultHouseholdId={scopedHouseholds[0]?.id}
-          initialData={
+          defaultHouseholdId={targetHouseholdIdForNewResident || scopedHouseholds[0]?.id}
+          initial={
             newMemberDefaults
               ? ({
+                  id: 0,
                   firstName: newMemberDefaults.firstName,
                   lastName: newMemberDefaults.lastName,
                   middleName: newMemberDefaults.middleName,
-                  householdId: scopedHouseholds[0]?.id || 0,
-                  barangayId: leaderPurok.barangayId,
+                  householdId: targetHouseholdIdForNewResident || scopedHouseholds[0]?.id || 0,
+                  precinct: "",
+                  no: "",
+                  pn: "",
+                  address: "",
                   code: leaderPurok.name,
-                } as Partial<Member>)
+                  is_purok_leader_indicator: false,
+                  is_household_leader: false,
+                  is_household_member: true,
+                  age: 30,
+                  religion: "",
+                  status: "Single",
+                  sc: false,
+                  pwd: false,
+                  ip: false,
+                  remarks: "",
+                } as Member)
               : undefined
           }
           onSave={async (data) => {
@@ -481,28 +731,32 @@ function MyDashboardPage() {
             });
             setShowRegisterNewModal(false);
             setNewMemberDefaults(null);
+            setTargetHouseholdIdForNewResident(undefined);
           }}
           onClose={() => {
             setShowRegisterNewModal(false);
             setNewMemberDefaults(null);
+            setTargetHouseholdIdForNewResident(undefined);
           }}
         />
       )}
 
-      {/* 4. Household Leader Add Member Modal */}
-      {showHhAddMember && (
-        <MemberFormModal
-          householdsData={scopedHouseholds}
-          barangaysData={state.barangays}
-          puroksData={state.puroks}
-          defaultHouseholdId={session.linkedEntityId ?? undefined}
-          onSave={(data) => {
-            void store.addMember(data);
-            setShowHhAddMember(false);
+      {/* 4. Add Household Modal for Purok */}
+      {showHouseholdModal && leaderPurok && (
+        <HouseholdModal
+          puroksData={[leaderPurok]}
+          onSave={async (data) => {
+            await store.addHousehold({
+              ...data,
+              purokId: leaderPurok.id,
+              barangayId: leaderPurok.barangayId,
+            });
+            setShowHouseholdModal(false);
           }}
-          onClose={() => setShowHhAddMember(false)}
+          onClose={() => setShowHouseholdModal(false)}
         />
       )}
+
     </>
   );
 }
@@ -526,7 +780,8 @@ function CompactMemberTable({
         <thead>
           <tr className="border-b border-slate-100 bg-slate-50/50 text-xs font-semibold uppercase tracking-wide text-slate-500">
             <th className="px-4 py-2.5">Name</th>
-            <th className="px-4 py-2.5">PN</th>
+            <th className="px-4 py-2.5">Precinct</th>
+            <th className="px-4 py-2.5">No.</th>
             <th className="px-4 py-2.5">Age</th>
             <th className="px-4 py-2.5">Status</th>
             <th className="px-4 py-2.5">Sectors</th>
@@ -551,7 +806,10 @@ function CompactMemberTable({
                   )}
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-slate-600 font-mono text-xs">
-                  {m.pn || "—"}
+                  {m.precinct || m.pn || "—"}
+                </td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-slate-600 font-mono text-xs">
+                  {m.no || "—"}
                 </td>
                 <td className="px-4 py-2.5 text-slate-600">{m.age || "—"}</td>
                 <td className="px-4 py-2.5 text-slate-600">{m.status || "—"}</td>

@@ -1,8 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
-  Accessibility,
   AlertTriangle,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Filter,
@@ -11,23 +9,28 @@ import {
   Plus,
   Search,
   UserCheck,
-  Users,
   X,
+  Sparkles,
 } from "lucide-react";
 import type { Member, Purok, Household, Barangay } from "@/lib/types";
 import { memberFullName } from "@/lib/types";
+import { supabase } from "@/lib/supabase";
 
 interface PurokLeaderSearchClaimProps {
   barangayMembers: Member[];
   puroks: Purok[];
   households: Household[];
   leaderPurok: Purok;
-  leaderBarangay?: Barangay;
-  onEditAndAssign: (member: Member) => void;
-  onAddNewMember: (initialQuery?: string) => void;
+  leaderBarangay?: Barangay | undefined;
+  onClaimMember: (member: Member) => void;
+  onAddNewMember?: (initialQuery?: string) => void;
+  query?: string | undefined;
+  onQueryChange?: ((val: string) => void) | undefined;
+  hideHeroSearch?: boolean | undefined;
+  claimedMemberIds?: Set<number>;
 }
 
-type StatusFilter = "all" | "unassigned" | "my-purok" | "other-purok";
+type ClaimFilterTab = "all-unlinked" | "unassigned" | "flagged-review" | "all-barangay";
 
 export function PurokLeaderSearchClaim({
   barangayMembers,
@@ -35,13 +38,27 @@ export function PurokLeaderSearchClaim({
   households,
   leaderPurok,
   leaderBarangay,
-  onEditAndAssign,
+  onClaimMember,
   onAddNewMember,
+  query: externalQuery,
+  onQueryChange: onExternalQueryChange,
+  hideHeroSearch = false,
+  claimedMemberIds = new Set(),
 }: PurokLeaderSearchClaimProps) {
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [internalQuery, setInternalQuery] = useState("");
+  const query = externalQuery !== undefined ? externalQuery : internalQuery;
+  const setQuery = onExternalQueryChange || setInternalQuery;
+  const [activeFilterTab, setActiveFilterTab] = useState<ClaimFilterTab>("all-unlinked");
   const [page, setPage] = useState(0);
   const [perPage, setPerPage] = useState(15);
+
+  // Local set of claimed IDs for optimistic instant removal
+  const [locallyClaimedIds, setLocallyClaimedIds] = useState<Set<number>>(new Set());
+
+  // Direct Supabase async search state for querying across 15k+ database rows
+  const [dbResults, setDbResults] = useState<Member[] | null>(null);
+  const [isSearchingDb, setIsSearchingDb] = useState(false);
+  const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const householdById = useMemo(
     () => new Map(households.map((h) => [h.id, h])),
@@ -53,35 +70,57 @@ export function PurokLeaderSearchClaim({
     [puroks],
   );
 
-  // Helper to determine status category for each member
+  // Determine whether a record is unassigned, flagged for review, or assigned
   const getMemberStatusInfo = (m: Member) => {
     const hh = householdById.get(m.householdId);
     const pk = hh ? purokById.get(hh.purokId) : undefined;
 
-    // Check if code or purok indicates unassigned
+    // Check if explicitly flagged for review
+    const isFlaggedForReview =
+      m.is_purok_leader_indicator ||
+      (m.remarks &&
+        (m.remarks.toLowerCase().includes("flag") ||
+          m.remarks.toLowerCase().includes("review") ||
+          m.remarks.toLowerCase().includes("check") ||
+          m.remarks.toLowerCase().includes("duplicate")));
+
+    // Check if purok_id is null or points to unassigned
     const isUnassigned =
+      m.purok_id === null ||
+      m.purok_id === undefined ||
       !pk ||
       pk.name.toLowerCase().includes("unassigned") ||
       !m.code ||
       m.code.toLowerCase() === "null" ||
       m.code.toLowerCase().includes("unassigned") ||
-      (hh?.householdLeaderName === "General Household" && (!m.code || m.code.toLowerCase().includes("unassigned")));
+      (hh?.householdLeaderName === "General Household" &&
+        (!m.code || m.code.toLowerCase().includes("unassigned")));
+
+    if (isFlaggedForReview) {
+      return {
+        category: "flagged-review" as const,
+        isUnassigned,
+        label: "Flagged for Review",
+        badgeCls: "bg-rose-50 text-rose-800 ring-rose-600/30",
+        icon: <Flag className="h-3.5 w-3.5 text-rose-600" />,
+      };
+    }
 
     if (isUnassigned) {
       return {
         category: "unassigned" as const,
-        label: "Unassigned",
-        purokName: "Unassigned",
-        badgeCls: "bg-slate-100 text-slate-700 ring-slate-300",
-        icon: <HelpCircle className="h-3.5 w-3.5 text-slate-500" />,
+        isUnassigned: true,
+        label: "Unassigned Member",
+        badgeCls: "bg-amber-50 text-amber-800 ring-amber-600/30",
+        icon: <HelpCircle className="h-3.5 w-3.5 text-amber-600" />,
       };
     }
 
-    if (pk?.id === leaderPurok.id || m.code === leaderPurok.name) {
+    if (m.purok_id === leaderPurok.id || pk?.id === leaderPurok.id || m.code === leaderPurok.name) {
       return {
         category: "my-purok" as const,
-        label: "Assigned to Your Purok",
-        purokName: leaderPurok.name,
+        isUnassigned: false,
+        label: "In Your Purok",
         badgeCls: "bg-emerald-50 text-emerald-800 ring-emerald-600/30",
         icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />,
       };
@@ -89,55 +128,104 @@ export function PurokLeaderSearchClaim({
 
     return {
       category: "other-purok" as const,
+      isUnassigned: false,
       label: `Assigned to ${pk?.name || "Other Purok"}`,
-      purokName: pk?.name || "Other Purok",
-      badgeCls: "bg-amber-50 text-amber-900 ring-amber-600/30",
-      icon: <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />,
+      badgeCls: "bg-slate-100 text-slate-700 ring-slate-300",
+      icon: <AlertTriangle className="h-3.5 w-3.5 text-slate-500" />,
     };
   };
 
-  // Counts for status filter pills
-  const counts = useMemo(() => {
-    let unassigned = 0;
-    let myPurok = 0;
-    let otherPurok = 0;
-
-    for (const m of barangayMembers) {
-      const info = getMemberStatusInfo(m);
-      if (info.category === "unassigned") unassigned++;
-      else if (info.category === "my-purok") myPurok++;
-      else otherPurok++;
+  // Direct Supabase Search when query is typed (hits members table with purok_id IS NULL OR is_purok_leader_indicator = true)
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setDbResults(null);
+      setIsSearchingDb(false);
+      return;
     }
 
-    return {
-      all: barangayMembers.length,
-      unassigned,
-      myPurok,
-      otherPurok,
-    };
-  }, [barangayMembers, householdById, purokById, leaderPurok.id, leaderPurok.name]);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
 
-  // Filtered members
+    searchDebounceRef.current = setTimeout(async () => {
+      setIsSearchingDb(true);
+      try {
+        let qb = supabase.from("members").select("*");
+
+        if (leaderBarangay?.id) {
+          qb = qb.eq("barangayId", leaderBarangay.id);
+        }
+
+        // MUST filter for records where purok_id IS NULL OR records that are flagged for review
+        if (activeFilterTab === "unassigned") {
+          qb = qb.or("purok_id.is.null,code.ilike.%unassigned%");
+        } else if (activeFilterTab === "flagged-review") {
+          qb = qb.or("is_purok_leader_indicator.eq.true,remarks.ilike.%review%,remarks.ilike.%flag%");
+        } else if (activeFilterTab === "all-unlinked") {
+          qb = qb.or("purok_id.is.null,is_purok_leader_indicator.eq.true,code.ilike.%unassigned%");
+        }
+
+        // Search by First Name, Last Name, or Precinct No
+        const terms = trimmed.replace(/[%_,]/g, " ").split(/\s+/).filter(Boolean);
+        if (terms.length > 0) {
+          const conditions = terms.map(
+            (t) =>
+              `firstName.ilike.%${t}%,lastName.ilike.%${t}%,middleName.ilike.%${t}%,pn.ilike.%${t}%,precinct.ilike.%${t}%,no.ilike.%${t}%`,
+          );
+          qb = qb.or(conditions.join(","));
+        }
+
+        qb = qb.limit(100);
+
+        const { data, error } = await qb;
+        if (!error && data) {
+          setDbResults(data as unknown as Member[]);
+        }
+      } catch (err) {
+        console.warn("Direct search query failed, using local store cache:", err);
+      } finally {
+        setIsSearchingDb(false);
+      }
+    }, 250);
+
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [query, activeFilterTab, leaderBarangay?.id]);
+
+  // Compute active dataset: merge direct DB results if present, or use barangayMembers
+  const baseMembers = useMemo(() => {
+    const list = dbResults !== null ? dbResults : barangayMembers;
+    // Exclude locally or externally claimed members
+    return list.filter(
+      (m) => !claimedMemberIds.has(m.id) && !locallyClaimedIds.has(m.id),
+    );
+  }, [dbResults, barangayMembers, claimedMemberIds, locallyClaimedIds]);
+
+  // Filtered members according to tab and query
   const filtered = useMemo(() => {
     const rawTokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
 
-    return barangayMembers.filter((m) => {
+    return baseMembers.filter((m) => {
       const statusInfo = getMemberStatusInfo(m);
 
-      // Status filter
-      if (statusFilter === "unassigned" && statusInfo.category !== "unassigned")
-        return false;
-      if (statusFilter === "my-purok" && statusInfo.category !== "my-purok")
-        return false;
-      if (statusFilter === "other-purok" && statusInfo.category !== "other-purok")
-        return false;
+      // Core rule: By default, Tab 2 MUST filter for records where purok_id IS NULL (unassigned members) OR records that are flagged for review
+      if (activeFilterTab === "all-unlinked") {
+        if (!statusInfo.isUnassigned && statusInfo.category !== "flagged-review") {
+          return false;
+        }
+      } else if (activeFilterTab === "unassigned") {
+        if (!statusInfo.isUnassigned) return false;
+      } else if (activeFilterTab === "flagged-review") {
+        if (statusInfo.category !== "flagged-review") return false;
+      }
 
-      // Search query filter (first_name, last_name, middle_name, pn, address)
-      if (rawTokens.length > 0) {
+      // Search query filtering across First Name, Last Name, Middle Name, PN, Precinct
+      if (rawTokens.length > 0 && dbResults === null) {
         const searchable = [
           m.firstName,
           m.lastName,
           m.middleName,
+          m.no,
           m.pn,
           m.precinct,
           m.address,
@@ -153,9 +241,29 @@ export function PurokLeaderSearchClaim({
 
       return true;
     });
-  }, [barangayMembers, query, statusFilter, householdById, purokById, leaderPurok.id, leaderPurok.name]);
+  }, [baseMembers, query, activeFilterTab, dbResults, householdById, purokById, leaderPurok.id, leaderPurok.name]);
 
-  // Paginated records
+  // Summary counts for filter tabs
+  const tabCounts = useMemo(() => {
+    let unassigned = 0;
+    let flagged = 0;
+
+    for (const m of barangayMembers) {
+      if (claimedMemberIds.has(m.id) || locallyClaimedIds.has(m.id)) continue;
+      const info = getMemberStatusInfo(m);
+      if (info.category === "flagged-review") flagged++;
+      if (info.isUnassigned) unassigned++;
+    }
+
+    return {
+      allUnlinked: unassigned + flagged,
+      unassigned,
+      flagged,
+      allBarangay: barangayMembers.length,
+    };
+  }, [barangayMembers, claimedMemberIds, locallyClaimedIds, householdById, purokById, leaderPurok.id, leaderPurok.name]);
+
+  // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
   const paginated = useMemo(() => {
     const start = page * perPage;
@@ -167,137 +275,192 @@ export function PurokLeaderSearchClaim({
     setPage(0);
   };
 
-  const handleStatusFilterChange = (status: StatusFilter) => {
-    setStatusFilter(status);
+  const handleFilterTabChange = (tab: ClaimFilterTab) => {
+    setActiveFilterTab(tab);
     setPage(0);
+  };
+
+  const handleClaim = (member: Member) => {
+    // Open modal
+    onClaimMember(member);
   };
 
   return (
     <div className="space-y-4">
-      {/* Search & Claim Hero Header */}
-      <div className="overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 p-6 text-white shadow-md">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center rounded-full bg-indigo-500/20 px-2.5 py-0.5 text-xs font-semibold text-indigo-200 ring-1 ring-inset ring-indigo-400/30">
-                Purok Leader Console
-              </span>
-              <span className="text-xs text-indigo-300">
-                Scope: {leaderPurok.name} · {leaderBarangay?.name || "Barangay"}
-              </span>
+      {/* ── SEARCH & CLAIM HERO / INSTRUCTION HEADER ── */}
+      {!hideHeroSearch && (
+        <div className="overflow-hidden rounded-2xl border border-indigo-200/90 bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 p-6 text-white shadow-md">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-300 ring-1 ring-inset ring-emerald-400/30">
+                  Search & Claim Tool
+                </span>
+                <span className="text-xs text-indigo-300">
+                  Target: {leaderPurok.name} · {leaderBarangay?.name || "Barangay"}
+                </span>
+              </div>
+              <h2 className="text-xl font-bold tracking-tight text-white sm:text-2xl">
+                Search & Claim Database
+              </h2>
+              <p className="text-xs text-indigo-200/80 sm:text-sm max-w-2xl">
+                Locate unassigned residents (such as imported SK voters) and records flagged for review. Assign them directly into your Purok and Households.
+              </p>
             </div>
-            <h2 className="text-xl font-bold tracking-tight text-white sm:text-2xl">
-              Member Search & Claim Registry
-            </h2>
-            <p className="text-xs text-indigo-200/80 sm:text-sm max-w-2xl">
-              Search across the entire <span className="font-semibold text-white">{leaderBarangay?.name || "Barangay"}</span> database to locate unassigned voters (e.g. SK voters, new arrivals) and assign them to your Purok.
-            </p>
+
+            {onAddNewMember && (
+              <div className="shrink-0">
+                <button
+                  onClick={() => onAddNewMember(query)}
+                  className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-all hover:bg-emerald-500 active:scale-95"
+                >
+                  <Plus className="h-4 w-4" /> Add Resident
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="shrink-0">
-            <button
-              onClick={() => onAddNewMember(query)}
-              className="flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-bold text-white shadow-md transition-all hover:bg-emerald-400 hover:shadow-lg active:scale-95"
-            >
-              <Plus className="h-4 w-4" /> Add New Member
-            </button>
+          {/* Search Input */}
+          <div className="mt-5 relative">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-slate-400">
+              <Search className="h-4 w-4 text-indigo-300" />
+            </div>
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              placeholder="Search database by First Name, Last Name, or Precinct No. (PN)..."
+              className="w-full rounded-xl border border-indigo-400/30 bg-white/10 pl-11 pr-10 py-3 text-sm text-white placeholder-indigo-200/60 shadow-inner backdrop-blur-md outline-none transition-all focus:border-indigo-400 focus:bg-white/20 focus:ring-2 focus:ring-indigo-400/30"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => handleQueryChange("")}
+                className="absolute inset-y-0 right-0 flex items-center pr-4 text-indigo-200 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
+      )}
 
-        {/* Big Search Input */}
-        <div className="mt-5 relative">
-          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-slate-400">
-            <Search className="h-5 w-5 text-indigo-300" />
-          </div>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => handleQueryChange(e.target.value)}
-            placeholder="Search by First Name, Last Name, Middle Name, or Precinct Number (PN)…"
-            className="w-full rounded-xl border border-indigo-400/30 bg-white/10 pl-11 pr-10 py-3 text-sm text-white placeholder-indigo-200/60 shadow-inner backdrop-blur-md outline-none transition-all focus:border-indigo-400 focus:bg-white/20 focus:ring-2 focus:ring-indigo-400/30"
-          />
-          {query && (
-            <button
-              onClick={() => handleQueryChange("")}
-              className="absolute inset-y-0 right-0 flex items-center pr-4 text-indigo-200 hover:text-white"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Filter Tabs & Counter */}
+      {/* ── FILTER TABS & STATUS INDICATOR ── */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
         <div className="flex flex-wrap items-center gap-1.5">
+          {/* Tab: All Unlinked / Available */}
           <button
-            onClick={() => handleStatusFilterChange("all")}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-              statusFilter === "all"
-                ? "bg-slate-900 text-white shadow-xs"
-                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-            }`}
-          >
-            All Barangay Residents ({counts.all})
-          </button>
-          <button
-            onClick={() => handleStatusFilterChange("unassigned")}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-              statusFilter === "unassigned"
+            type="button"
+            onClick={() => handleFilterTabChange("all-unlinked")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+              activeFilterTab === "all-unlinked"
                 ? "bg-indigo-600 text-white shadow-xs"
                 : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
           >
-            <HelpCircle className="h-3.5 w-3.5" />
-            Unassigned ({counts.unassigned})
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>Unlinked & Review</span>
+            <span
+              className={`rounded-full px-1.5 py-0.2 text-[10px] ${
+                activeFilterTab === "all-unlinked"
+                  ? "bg-indigo-700 text-white"
+                  : "bg-slate-200 text-slate-700"
+              }`}
+            >
+              {tabCounts.allUnlinked}
+            </span>
           </button>
+
+          {/* Tab: Unassigned Members (purok_id IS NULL) */}
           <button
-            onClick={() => handleStatusFilterChange("my-purok")}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-              statusFilter === "my-purok"
-                ? "bg-emerald-600 text-white shadow-xs"
-                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-            }`}
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Assigned to Your Purok ({counts.myPurok})
-          </button>
-          <button
-            onClick={() => handleStatusFilterChange("other-purok")}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-              statusFilter === "other-purok"
+            type="button"
+            onClick={() => handleFilterTabChange("unassigned")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+              activeFilterTab === "unassigned"
                 ? "bg-amber-600 text-white shadow-xs"
                 : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
           >
-            <AlertTriangle className="h-3.5 w-3.5" />
-            Other Puroks ({counts.otherPurok})
+            <HelpCircle className="h-3.5 w-3.5" />
+            <span>Unassigned Voters</span>
+            <span
+              className={`rounded-full px-1.5 py-0.2 text-[10px] ${
+                activeFilterTab === "unassigned"
+                  ? "bg-amber-700 text-white"
+                  : "bg-slate-200 text-slate-700"
+              }`}
+            >
+              {tabCounts.unassigned}
+            </span>
+          </button>
+
+          {/* Tab: Flagged for Review */}
+          <button
+            type="button"
+            onClick={() => handleFilterTabChange("flagged-review")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+              activeFilterTab === "flagged-review"
+                ? "bg-rose-600 text-white shadow-xs"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            <Flag className="h-3.5 w-3.5" />
+            <span>Flagged for Review</span>
+            <span
+              className={`rounded-full px-1.5 py-0.2 text-[10px] ${
+                activeFilterTab === "flagged-review"
+                  ? "bg-rose-700 text-white"
+                  : "bg-slate-200 text-slate-700"
+              }`}
+            >
+              {tabCounts.flagged}
+            </span>
+          </button>
+
+          {/* Tab: All Barangay Records (Optional lookup) */}
+          <button
+            type="button"
+            onClick={() => handleFilterTabChange("all-barangay")}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+              activeFilterTab === "all-barangay"
+                ? "bg-slate-800 text-white shadow-xs"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            All Database Records ({tabCounts.allBarangay})
           </button>
         </div>
 
-        <div className="text-xs text-slate-500">
-          Showing <span className="font-semibold text-slate-800">{filtered.length}</span> matching record{filtered.length === 1 ? "" : "s"}
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          {isSearchingDb && (
+            <span className="inline-flex items-center gap-1 text-indigo-600 font-semibold">
+              <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+              Searching database...
+            </span>
+          )}
+          <span>
+            Showing <span className="font-bold text-slate-800">{filtered.length}</span> record{filtered.length === 1 ? "" : "s"}
+          </span>
         </div>
       </div>
 
-      {/* Results Table */}
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      {/* ── SEARCH RESULTS TABLE ── */}
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/80 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50/90 text-xs font-bold uppercase tracking-wider text-slate-600">
                 <th className="px-4 py-3">Resident Name</th>
-                <th className="px-4 py-3">Precinct No. (PN)</th>
-                <th className="px-4 py-3">Current Status</th>
-                <th className="px-4 py-3">Assigned Household</th>
+                <th className="px-4 py-3">Precinct</th>
+                <th className="px-4 py-3">No.</th>
+                <th className="px-4 py-3">Database Status</th>
                 <th className="px-4 py-3">Demographics</th>
-                <th className="px-4 py-3 text-right">Claim & Assign</th>
+                <th className="px-4 py-3 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginated.map((m) => {
                 const statusInfo = getMemberStatusInfo(m);
-                const hh = householdById.get(m.householdId);
 
                 return (
                   <tr
@@ -309,19 +472,26 @@ export function PurokLeaderSearchClaim({
                       <div className="font-semibold text-slate-900">
                         {memberFullName(m)}
                       </div>
-                      <div className="text-[11px] text-slate-400">
-                        {m.address || "No voter address"}
+                      <div className="text-[11px] text-slate-400 truncate max-w-xs">
+                        {m.address || "Imported voter record"}
                       </div>
                     </td>
 
-                    {/* PN */}
+                    {/* Precinct */}
                     <td className="whitespace-nowrap px-4 py-3">
-                      <span className="font-mono text-xs font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
-                        {m.pn || "—"}
+                      <span className="font-mono text-xs font-bold text-indigo-900 bg-indigo-50 border border-indigo-200/60 px-2 py-0.5 rounded-md">
+                        {m.precinct || m.pn || "—"}
                       </span>
                     </td>
 
-                    {/* Status Badge */}
+                    {/* No. */}
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <span className="font-mono text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
+                        {m.no || "—"}
+                      </span>
+                    </td>
+
+                    {/* Database Status */}
                     <td className="whitespace-nowrap px-4 py-3">
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${statusInfo.badgeCls}`}
@@ -331,19 +501,7 @@ export function PurokLeaderSearchClaim({
                       </span>
                     </td>
 
-                    {/* Household */}
-                    <td className="px-4 py-3 text-xs text-slate-600 max-w-[200px] truncate">
-                      {hh && !statusInfo.label.includes("Unassigned") ? (
-                        <div>
-                          <p className="font-medium text-slate-800">{hh.householdLeaderName}</p>
-                          <p className="text-[11px] text-slate-400 truncate">{hh.address}</p>
-                        </div>
-                      ) : (
-                        <span className="text-slate-400 italic">No household assigned</span>
-                      )}
-                    </td>
-
-                    {/* Demographics & Special Sectors */}
+                    {/* Demographics */}
                     <td className="px-4 py-3 text-xs text-slate-600">
                       <div>
                         <span>{m.age ? `${m.age} y/o` : "Age —"} · {m.status || "Single"}</span>
@@ -355,26 +513,27 @@ export function PurokLeaderSearchClaim({
                           </span>
                         )}
                         {m.pwd && (
-                          <span className="rounded bg-green-100 px-1.5 py-0.2 text-[10px] font-bold text-green-800">
+                          <span className="rounded bg-emerald-100 px-1.5 py-0.2 text-[10px] font-bold text-emerald-800">
                             PWD
                           </span>
                         )}
                         {m.ip && (
-                          <span className="rounded bg-orange-100 px-1.5 py-0.2 text-[10px] font-bold text-orange-800">
+                          <span className="rounded bg-amber-100 px-1.5 py-0.2 text-[10px] font-bold text-amber-800">
                             IP
                           </span>
                         )}
                       </div>
                     </td>
 
-                    {/* Action Button */}
+                    {/* Action Button: Claim Member */}
                     <td className="whitespace-nowrap px-4 py-3 text-right">
                       <button
-                        onClick={() => onEditAndAssign(m)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 active:scale-95"
+                        type="button"
+                        onClick={() => handleClaim(m)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-emerald-700 active:scale-95"
                       >
                         <UserCheck className="h-3.5 w-3.5" />
-                        Edit & Assign
+                        Claim Member
                       </button>
                     </td>
                   </tr>
@@ -383,26 +542,29 @@ export function PurokLeaderSearchClaim({
 
               {paginated.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center">
+                  <td colSpan={5} className="py-12 text-center">
                     <div className="mx-auto max-w-sm space-y-3">
                       <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                         <Search className="h-6 w-6" />
                       </div>
                       <h3 className="text-sm font-semibold text-slate-800">
-                        No residents found matching your criteria
+                        No members found
                       </h3>
                       <p className="text-xs text-slate-500">
                         {query
-                          ? `No records found in ${leaderBarangay?.name || "Barangay"} matching "${query}".`
-                          : "There are currently no records in this category."}
+                          ? `No unassigned members match "${query}". Try searching by a different first name, last name, or precinct number.`
+                          : "There are currently no records matching this category."}
                       </p>
-                      <button
-                        onClick={() => onAddNewMember(query)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        Verify & Add as New Member
-                      </button>
+                      {onAddNewMember && (
+                        <button
+                          type="button"
+                          onClick={() => onAddNewMember(query)}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Register as New Member
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -415,46 +577,27 @@ export function PurokLeaderSearchClaim({
         {filtered.length > 0 && (
           <div className="flex flex-col items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs sm:flex-row">
             <div className="text-slate-500">
-              Showing <span className="font-semibold text-slate-800">{page * perPage + 1}</span> to{" "}
-              <span className="font-semibold text-slate-800">
-                {Math.min((page + 1) * perPage, filtered.length)}
-              </span>{" "}
-              of <span className="font-semibold text-slate-800">{filtered.length}</span> residents
+              Page <span className="font-semibold text-slate-800">{page + 1}</span> of{" "}
+              <span className="font-semibold text-slate-800">{totalPages}</span>
             </div>
 
             <div className="flex items-center gap-2">
-              <select
-                value={perPage}
-                onChange={(e) => {
-                  setPerPage(Number(e.target.value));
-                  setPage(0);
-                }}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 outline-none"
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 disabled:opacity-40"
               >
-                <option value={15}>15 per page</option>
-                <option value={25}>25 per page</option>
-                <option value={50}>50 per page</option>
-              </select>
-
-              <div className="flex items-center gap-1">
-                <button
-                  disabled={page === 0}
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  className="rounded-md border border-slate-300 bg-white p-1 text-slate-600 disabled:opacity-40 hover:bg-slate-100"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="px-2 text-slate-600">
-                  Page {page + 1} of {totalPages}
-                </span>
-                <button
-                  disabled={page >= totalPages - 1}
-                  onClick={() => setPage((p) => p + 1)}
-                  className="rounded-md border border-slate-300 bg-white p-1 text-slate-600 disabled:opacity-40 hover:bg-slate-100"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
+                <ChevronLeft className="h-3.5 w-3.5" /> Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 disabled:opacity-40"
+              >
+                Next <ChevronRight className="h-3.5 w-3.5" />
+              </button>
             </div>
           </div>
         )}

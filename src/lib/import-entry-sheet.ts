@@ -43,6 +43,77 @@ export interface ImportSummary {
 
 const str = (v: unknown): string => String(v ?? "").trim();
 const hasValue = (v: unknown): boolean => str(v) !== "";
+const normalizedHeader = (header: string): string =>
+  header.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+function readColumn(
+  row: Record<string, string>,
+  ...headers: string[]
+): string {
+  return headers
+    .map((header) => row[normalizedHeader(header)] ?? "")
+    .find((value) => value !== "") ?? "";
+}
+
+function findPrecinct(norm: Record<string, string>, raw: Record<string, unknown>): string {
+  const directMatches = [
+    "PRECINCTNO",
+    "PRECINCT",
+    "PRECINCTNUMBER",
+    "PRECINCTID",
+    "PN",
+    "PRECNO",
+    "PCTNO",
+    "PRCNTNO",
+    "VOTERSPRECINCT",
+    "VOTERPRECINCT",
+    "CLUSTEREDPRECINCT",
+    "ESTABLISHEDPRECINCT",
+  ];
+  for (const k of directMatches) {
+    if (norm[k]) return norm[k];
+  }
+  for (const [k, v] of Object.entries(norm)) {
+    if (!v) continue;
+    if (k.includes("PRECINCT") || k.includes("PRCNT") || k === "PN" || k.startsWith("PCT") || k.startsWith("PREC")) {
+      return v;
+    }
+  }
+  for (const [rawKey, rawVal] of Object.entries(raw)) {
+    const v = str(rawVal);
+    if (!v) continue;
+    const clean = rawKey.trim().toLowerCase();
+    if (clean.includes("precinct") || clean.includes("prcnt") || clean.startsWith("pct") || clean === "pn" || clean.startsWith("prec")) {
+      return v;
+    }
+  }
+  return "";
+}
+
+function findSerialNo(norm: Record<string, string>, raw: Record<string, unknown>): string {
+  const directMatches = [
+    "NO",
+    "SN",
+    "SERIALNO",
+    "SERIALNUMBER",
+    "VOTERNO",
+    "VOTERNUMBER",
+    "SEQNO",
+    "SEQUENCENO",
+  ];
+  for (const k of directMatches) {
+    if (norm[k]) return norm[k];
+  }
+  for (const [rawKey, rawVal] of Object.entries(raw)) {
+    const v = str(rawVal);
+    if (!v) continue;
+    const clean = rawKey.trim().toLowerCase();
+    if (clean === "no" || clean === "no." || clean === "#" || clean === "sn" || clean === "s.n." || clean.includes("serial") || clean.includes("voter no")) {
+      return v;
+    }
+  }
+  return "";
+}
 
 // ── Normalize Purok Code to Standard Purok Name ──────────────────────────────
 export function normalizePurokName(code: string): string {
@@ -51,7 +122,7 @@ export function normalizePurokName(code: string): string {
   if (/^\d+$/.test(c)) return `Purok ${c}`;
   if (/^p\s*(\d+[a-z]?)$/i.test(c)) {
     const match = c.match(/^p\s*(\d+[a-z]?)$/i);
-    return `Purok ${match ? match[1].toUpperCase() : c}`;
+    return match && match[1] ? `Purok ${match[1].toUpperCase()}` : c;
   }
   return c;
 }
@@ -63,9 +134,9 @@ export async function parseEntrySheet(
   targetBarangayName?: string,
 ): Promise<ImportSummary> {
   const XLSX = await import("xlsx");
-  const book = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const buffer = await file.arrayBuffer();
+  const book = XLSX.read(buffer, { type: "array" });
 
-  // Find the ENTRY sheet (case-insensitive)
   const entrySheetName = book.SheetNames.find(
     (n) => n.toUpperCase() === "ENTRY",
   );
@@ -75,9 +146,32 @@ export async function parseEntrySheet(
     );
   }
 
+  const sheet = book.Sheets[entrySheetName]!;
+  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
+
+  let headerRowIndex = 0;
+  for (let r = 0; r < Math.min(10, aoa.length); r++) {
+    const rowCells = (aoa[r] || []).map((c) => String(c ?? "").trim().toUpperCase());
+    const hasVoterHeader = rowCells.some((c) =>
+      c.includes("PRECINCT") ||
+      c.includes("LAST") ||
+      c.includes("FIRST") ||
+      c === "PN" ||
+      c === "SN" ||
+      c === "NO" ||
+      c === "NO." ||
+      c.includes("VOTER") ||
+      c.includes("NAME")
+    );
+    if (hasVoterHeader) {
+      headerRowIndex = r;
+      break;
+    }
+  }
+
   const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
-    book.Sheets[entrySheetName]!,
-    { defval: "" },
+    sheet,
+    { range: headerRowIndex, defval: "" },
   );
 
   if (rawRows.length === 0) {
@@ -88,20 +182,20 @@ export async function parseEntrySheet(
   const rows: EntryRow[] = rawRows.map((raw) => {
     const norm: Record<string, string> = {};
     for (const [key, val] of Object.entries(raw)) {
-      norm[key.toUpperCase().trim()] = str(val);
+      norm[normalizedHeader(key)] = str(val);
     }
     return {
-      PN: norm["PN"] ?? "",
-      SN: norm["SN"] ?? "",
-      LAST: norm["LAST"] ?? "",
-      FIRST: norm["FIRST"] ?? "",
-      MIDDLE: norm["MIDDLE"] ?? "",
-      ADDRESS: norm["ADDRESS"] ?? "",
-      CODE: norm["CODE"] ?? "",
-      PL: norm["PL"] ?? "",
-      HL: norm["HL"] ?? "",
-      HM: norm["HM"] ?? "",
-      REMARKS: norm["REMARKS"] ?? "",
+      PN: findPrecinct(norm, raw),
+      SN: findSerialNo(norm, raw),
+      LAST: readColumn(norm, "LAST", "Last Name", "Surname", "Family Name", "Apelyido"),
+      FIRST: readColumn(norm, "FIRST", "First Name", "Given Name"),
+      MIDDLE: readColumn(norm, "MIDDLE", "Middle Name", "MI", "Middle Initial"),
+      ADDRESS: readColumn(norm, "ADDRESS", "Voter Address", "Residence"),
+      CODE: readColumn(norm, "CODE", "Purok", "Zone", "Sitio"),
+      PL: readColumn(norm, "PL"),
+      HL: readColumn(norm, "HL"),
+      HM: readColumn(norm, "HM"),
+      REMARKS: readColumn(norm, "REMARKS", "Remarks / Notes", "Remarks", "Notes"),
     };
   });
 

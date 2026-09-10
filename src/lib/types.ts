@@ -4,6 +4,13 @@ export interface Barangay {
   barangayCaptainName: string;
 }
 
+export interface Team {
+  id: number;
+  barangay_id: number;
+  team_name: string;
+  description?: string;
+}
+
 export interface Purok {
   id: number;
   barangayId: number;
@@ -24,7 +31,10 @@ export type CivilStatus = "Single" | "Married" | "Widowed" | "Separated";
 export interface Member {
   id: number;
   householdId: number;
+  purok_id?: number | null;
   barangayId?: number;
+  teamId?: number | null;
+  team_id?: number | null;
 
   lastName: string;
   firstName: string;
@@ -92,6 +102,11 @@ export interface Database {
         Row: Barangay;
         Insert: Omit<Barangay, "id">;
         Update: Partial<Omit<Barangay, "id">>;
+      };
+      teams: {
+        Row: Team;
+        Insert: Omit<Team, "id">;
+        Update: Partial<Omit<Team, "id">>;
       };
       puroks: {
         Row: Purok;

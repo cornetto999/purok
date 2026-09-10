@@ -27,8 +27,7 @@ export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
 
-// Official Google reCAPTCHA v2 test site key as fallback for localhost dev
-const DEFAULT_SITE_KEY = "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI";
+const LOCAL_CAPTCHA_TOKEN = "local-development-verification";
 
 function formatCountdown(totalSecs: number): string {
   const m = Math.floor(totalSecs / 60);
@@ -47,24 +46,26 @@ function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [captchaErrored, setCaptchaErrored] = useState(false);
 
   // Cooldown / Lockout countdown state
   const [lockedUntil, setLockedUntil] = useState<string | null>(null);
   const [countdownRemaining, setCountdownRemaining] = useState<number>(0);
 
-  const siteKey =
-    (typeof import.meta !== "undefined" &&
-      import.meta.env &&
-      import.meta.env.VITE_RECAPTCHA_SITE_KEY) ||
-    DEFAULT_SITE_KEY;
+  const siteKey = import.meta.env["VITE_RECAPTCHA_SITE_KEY"] as
+    string | undefined;
+  const isLocalDevelopment =
+    typeof window !== "undefined" &&
+    ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 
   // If already logged in, redirect
-  if (state.session) {
-    const dest =
-      state.session.role === "Admin" ? "/dashboard" : "/my-dashboard";
-    void navigate({ to: dest });
-    return null;
-  }
+  useEffect(() => {
+    if (state.sessionChecked && state.session) {
+      const dest =
+        state.session.role === "Admin" ? "/dashboard" : "/my-dashboard";
+      void navigate({ to: dest });
+    }
+  }, [state.sessionChecked, state.session, navigate]);
 
   // Handle active countdown timer
   useEffect(() => {
@@ -99,6 +100,10 @@ function LoginPage() {
     return () => clearInterval(timer);
   }, [lockedUntil]);
 
+  if (state.sessionChecked && state.session) {
+    return null;
+  }
+
   const isAccountLocked = countdownRemaining > 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -126,7 +131,9 @@ function LoginPage() {
       // Check if account is locked
       if (res.accountLocked && res.lockedUntil) {
         setLockedUntil(res.lockedUntil);
-        setError(res.error || "Account locked due to multiple failed attempts.");
+        setError(
+          res.error || "Account locked due to multiple failed attempts.",
+        );
       } else {
         setError(res.error || "Invalid username or password.");
       }
@@ -202,7 +209,8 @@ function LoginPage() {
                       Security Lockout Triggered
                     </p>
                     <p className="text-xs text-red-800 font-medium leading-relaxed">
-                      Account locked due to multiple failed attempts. Try again in:
+                      Account locked due to multiple failed attempts. Try again
+                      in:
                     </p>
                     <div className="flex items-center gap-2 pt-0.5">
                       <div className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1 text-sm font-mono font-extrabold text-white shadow-xs">
@@ -272,21 +280,52 @@ function LoginPage() {
               </div>
             </div>
 
-            {/* Google reCAPTCHA v2 Widget */}
+            {/* Google reCAPTCHA v2 Widget / local development verification */}
             <div className="flex flex-col items-center justify-center pt-1 pb-1">
-              <ReCAPTCHA
-                ref={recaptchaRef}
-                sitekey={siteKey}
-                onChange={(token) => {
-                  setCaptchaToken(token);
-                  setError("");
-                }}
-                onExpired={() => setCaptchaToken(null)}
-              />
+              {isLocalDevelopment ? (
+                <label className="flex w-full cursor-pointer items-center gap-3 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700 transition-colors hover:bg-slate-100">
+                  <input
+                    type="checkbox"
+                    checked={captchaToken === LOCAL_CAPTCHA_TOKEN}
+                    onChange={(event) => {
+                      setCaptchaToken(
+                        event.target.checked ? LOCAL_CAPTCHA_TOKEN : null,
+                      );
+                      setError("");
+                    }}
+                    className="h-4 w-4 rounded border-slate-300 accent-slate-900"
+                  />
+                  <span>
+                    <span className="block font-semibold">
+                      Development verification
+                    </span>
+                    <span className="block text-xs text-slate-500">
+                      Local sign-in does not require Google reCAPTCHA.
+                    </span>
+                  </span>
+                </label>
+              ) : siteKey && !captchaErrored ? (
+                <ReCAPTCHA
+                  ref={recaptchaRef}
+                  sitekey={siteKey}
+                  onChange={(token) => {
+                    setCaptchaToken(token);
+                    setError("");
+                  }}
+                  onExpired={() => setCaptchaToken(null)}
+                  onErrored={() => setCaptchaErrored(true)}
+                />
+              ) : (
+                <div className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                  {captchaErrored
+                    ? "reCAPTCHA could not load. Check your connection and refresh the page."
+                    : "reCAPTCHA is not configured. Set VITE_RECAPTCHA_SITE_KEY to enable sign in."}
+                </div>
+              )}
               {!captchaToken && !isAccountLocked && (
                 <p className="mt-1.5 text-[11px] text-slate-400 flex items-center gap-1">
                   <Lock className="h-3 w-3 text-slate-400" />
-                  Please complete the reCAPTCHA to enable sign in
+                  Complete verification to enable sign in
                 </p>
               )}
             </div>
@@ -328,9 +367,13 @@ function LoginPage() {
                   <code className="text-slate-600 font-mono">password123</code>
                 </p>
                 <p>
-                  <span className="font-semibold text-slate-800">Purok Leader:</span>{" "}
-                  <code className="text-indigo-600 font-mono">rodrigo.alvarez</code> /{" "}
-                  <code className="text-slate-600 font-mono">purok123</code>
+                  <span className="font-semibold text-slate-800">
+                    Purok Leader:
+                  </span>{" "}
+                  <code className="text-indigo-600 font-mono">
+                    rodrigo.alvarez
+                  </code>{" "}
+                  / <code className="text-slate-600 font-mono">purok123</code>
                 </p>
               </div>
             </div>

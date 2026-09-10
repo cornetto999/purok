@@ -19,6 +19,10 @@ interface AdvancedFilterProps {
   barangayOptions: { id: number; label: string }[];
   barangayFilter: string;
   onBarangayFilterChange: (v: string) => void;
+  // Team dropdown
+  teamOptions: { id: number; label: string }[];
+  teamFilter: string;
+  onTeamFilterChange: (v: string) => void;
 }
 
 export function AdvancedFilter({
@@ -27,8 +31,9 @@ export function AdvancedFilter({
   sectorFilter, onSectorFilterChange,
   purokOptions, purokFilter, onPurokFilterChange,
   barangayOptions, barangayFilter, onBarangayFilterChange,
+  teamOptions, teamFilter, onTeamFilterChange,
 }: AdvancedFilterProps) {
-  const hasActiveFilters = query || selectedLastNames.length > 0 || sectorFilter !== "all" || purokFilter !== "all" || barangayFilter !== "all";
+  const hasActiveFilters = query || selectedLastNames.length > 0 || sectorFilter !== "all" || purokFilter !== "all" || barangayFilter !== "all" || teamFilter !== "all";
 
   const clearAll = () => {
     onQueryChange("");
@@ -36,6 +41,7 @@ export function AdvancedFilter({
     onSectorFilterChange("all");
     onPurokFilterChange("all");
     onBarangayFilterChange("all");
+    onTeamFilterChange("all");
   };
 
   return (
@@ -92,6 +98,19 @@ export function AdvancedFilter({
           <option value="PWD">PWD</option>
           <option value="IP">Indigenous (IP)</option>
         </select>
+
+        {/* Team */}
+        {teamOptions.length > 0 && (
+          <select
+            value={teamFilter}
+            onChange={(e) => onTeamFilterChange(e.target.value)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-500"
+          >
+            <option value="all">All Teams</option>
+            <option value="unassigned">Unassigned</option>
+            {teamOptions.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        )}
 
         {hasActiveFilters && (
           <button

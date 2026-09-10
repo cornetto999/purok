@@ -6,7 +6,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import type { Barangay, Purok, Household, Member, User } from "./types";
+import type { Barangay, Purok, Household, Member, User, Team } from "./types";
 import type { DataSet } from "./excel";
 import {
   hashPassword,
@@ -23,13 +23,13 @@ async function fetchAllRows<T>(
   fetchPage: (
     from: number,
     to: number,
-  ) => Promise<{ data: T[] | null; error: { message: string } | null }>,
+  ) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>,
 ): Promise<T[]> {
   const rows: T[] = [];
   for (let from = 0; ; from += QUERY_PAGE_SIZE) {
     const { data, error } = await fetchPage(from, from + QUERY_PAGE_SIZE - 1);
     if (error) throw new Error(error.message);
-    const page = data ?? [];
+    const page = (data ?? []) as unknown as T[];
     rows.push(...page);
     if (page.length < QUERY_PAGE_SIZE) return rows;
   }
@@ -41,8 +41,10 @@ export interface AppState {
   households: Household[];
   members: Member[];
   users: User[];
+  teams: Team[];
   pendingDuplicates: PendingDuplicate[];
   session: Session | null;
+  sessionChecked: boolean;
   initialized: boolean;
 }
 
@@ -81,6 +83,13 @@ interface StoreContextValue {
     data: Partial<Omit<Member, "id">>,
   ) => Promise<void>;
   deleteMember: (id: number) => Promise<void>;
+
+  addTeam: (data: Omit<Team, "id">) => Promise<void>;
+  updateTeam: (
+    id: number,
+    data: Partial<Omit<Team, "id">>,
+  ) => Promise<void>;
+  deleteTeam: (id: number) => Promise<void>;
 
   addHousehold: (data: Omit<Household, "id">) => Promise<void>;
   updateHousehold: (
@@ -127,7 +136,7 @@ function loadPendingDuplicates(): PendingDuplicate[] {
   }
 }
 
-function duplicateKey(
+export function duplicateKey(
   member: Pick<
     Member,
     "lastName" | "firstName" | "middleName" | "pn" | "no" | "address"
@@ -156,30 +165,54 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     households: [],
     members: [],
     users: [],
-    pendingDuplicates: loadPendingDuplicates(),
-    session: getSession(),
+    teams: [],
+    pendingDuplicates: [],
+    session: null,
+    sessionChecked: false,
     initialized: false,
   });
+
+  // Hydrate session and pendingDuplicates on client mount to avoid SSR hydration mismatch
+  useEffect(() => {
+    const session = getSession();
+    const pendingDuplicates = loadPendingDuplicates();
+    setState((prev) => ({
+      ...prev,
+      session,
+      pendingDuplicates,
+      sessionChecked: true,
+    }));
+  }, []);
 
   const refreshData = useCallback(async () => {
     try {
       const [b, p, h, m, u] = await Promise.all([
-        fetchAllRows((from, to) =>
+        fetchAllRows<Barangay>((from, to) =>
           supabase.from("barangays").select("*").range(from, to),
         ),
-        fetchAllRows((from, to) =>
+        fetchAllRows<Purok>((from, to) =>
           supabase.from("puroks").select("*").range(from, to),
         ),
-        fetchAllRows((from, to) =>
+        fetchAllRows<Household>((from, to) =>
           supabase.from("households").select("*").range(from, to),
         ),
-        fetchAllRows((from, to) =>
+        fetchAllRows<Member>((from, to) =>
           supabase.from("members").select("*").range(from, to),
         ),
-        fetchAllRows((from, to) =>
+        fetchAllRows<User>((from, to) =>
           supabase.from("users").select("*").range(from, to),
         ),
       ]);
+
+      // Fetch teams separately — table may not exist yet if migration hasn't run
+      let t: Team[] = [];
+      try {
+        t = await fetchAllRows<Team>((from, to) =>
+          supabase.from("teams").select("*").range(from, to),
+        );
+      } catch {
+        console.warn("Teams table not found — skipping. Run the migration SQL in Supabase to enable team features.");
+      }
 
       setState((prev) => ({
         ...prev,
@@ -188,6 +221,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         households: h,
         members: m,
         users: u,
+        teams: t,
         initialized: true,
       }));
     } catch (err) {
@@ -252,18 +286,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // CRUD Implementations
   const addMember = async (data: Omit<Member, "id">) => {
-    const { error } = await supabase.from("members").insert([data]);
-    if (!error) await refreshData();
+    const precinctVal = data.precinct || data.pn || "";
+    const payload = {
+      ...data,
+      precinct: precinctVal,
+      pn: precinctVal,
+    };
+    const { error } = await supabase.from("members").insert([payload]);
+    if (error) throw new Error(`Could not add member: ${error.message}`);
+    await refreshData();
   };
   const updateMember = async (
     id: number,
     data: Partial<Omit<Member, "id">>,
   ) => {
-    const { error } = await supabase.from("members").update(data).eq("id", id);
-    if (!error) await refreshData();
+    const patch = { ...data };
+    if (patch.precinct !== undefined || patch.pn !== undefined) {
+      const precinctVal = patch.precinct ?? patch.pn ?? "";
+      patch.precinct = precinctVal;
+      patch.pn = precinctVal;
+    }
+    const { error } = await supabase.from("members").update(patch).eq("id", id);
+    if (error) throw new Error(`Could not save member: ${error.message}`);
+    await refreshData();
   };
   const deleteMember = async (id: number) => {
     const { error } = await supabase.from("members").delete().eq("id", id);
+    if (!error) await refreshData();
+  };
+
+  const addTeam = async (data: Omit<Team, "id">) => {
+    const { error } = await supabase.from("teams").insert([data]);
+    if (!error) await refreshData();
+  };
+  const updateTeam = async (
+    id: number,
+    data: Partial<Omit<Team, "id">>,
+  ) => {
+    const { error } = await supabase.from("teams").update(data).eq("id", id);
+    if (!error) await refreshData();
+  };
+  const deleteTeam = async (id: number) => {
+    const { error } = await supabase.from("teams").delete().eq("id", id);
     if (!error) await refreshData();
   };
 
@@ -350,11 +414,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           role: "Household Leader",
         };
         if (userAccount.password && userAccount.password.trim()) {
-          updatePayload.password_hash = await hashPassword(
+          updatePayload["password_hash"] = await hashPassword(
             userAccount.password.trim(),
           );
-          updatePayload.failed_login_attempts = 0;
-          updatePayload.account_locked_until = null;
+          updatePayload["failed_login_attempts"] = 0;
+          updatePayload["account_locked_until"] = null;
         }
         const { error } = await supabase
           .from("users")
@@ -424,11 +488,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           role: "Purok Leader",
         };
         if (userAccount.password && userAccount.password.trim()) {
-          updatePayload.password_hash = await hashPassword(
+          updatePayload["password_hash"] = await hashPassword(
             userAccount.password.trim(),
           );
-          updatePayload.failed_login_attempts = 0;
-          updatePayload.account_locked_until = null;
+          updatePayload["failed_login_attempts"] = 0;
+          updatePayload["account_locked_until"] = null;
         }
         const { error } = await supabase
           .from("users")
@@ -464,16 +528,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const bulkImport = async (data: DataSet): Promise<ImportResult> => {
     const [barangayResult, purokResult, householdResult, memberResult] =
       await Promise.all([
-        fetchAllRows((from, to) =>
+        fetchAllRows<Barangay>((from, to) =>
           supabase.from("barangays").select("*").range(from, to),
         ),
-        fetchAllRows((from, to) =>
+        fetchAllRows<Purok>((from, to) =>
           supabase.from("puroks").select("*").range(from, to),
         ),
-        fetchAllRows((from, to) =>
+        fetchAllRows<Household>((from, to) =>
           supabase.from("households").select("*").range(from, to),
         ),
-        fetchAllRows((from, to) =>
+        fetchAllRows<Member>((from, to) =>
           supabase.from("members").select("*").range(from, to),
         ),
       ]);
@@ -539,6 +603,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     for (const h of data.households) {
       const newPId = pIdMap.get(h.purokId);
       if (!newPId) continue;
+      const originalPurok = data.puroks.find((p) => p.id === h.purokId);
+      const newBId = originalPurok ? bIdMap.get(originalPurok.barangayId) : undefined;
       const existing = existingHouseholds.find(
         (item) =>
           item.purokId === newPId &&
@@ -555,7 +621,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .insert([
           {
             purokId: newPId,
-            barangayId: newBId,
+            ...(newBId !== undefined ? { barangayId: newBId } : {}),
             householdLeaderName: h.householdLeaderName,
             address: h.address,
           },
@@ -582,9 +648,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const originalPurok = originalHousehold ? data.puroks.find((p) => p.id === originalHousehold.purokId) : null;
       const mappedBarangayId = originalPurok ? bIdMap.get(originalPurok.barangayId) : undefined;
 
-      const mappedMember = {
+      const mappedMember: Omit<Member, "id"> = {
         householdId: newHId,
-        barangayId: mappedBarangayId,
+        ...(mappedBarangayId !== undefined ? { barangayId: mappedBarangayId } : {}),
         lastName: m.lastName,
         firstName: m.firstName,
         middleName: m.middleName,
@@ -693,6 +759,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addMember,
     updateMember,
     deleteMember,
+    addTeam,
+    updateTeam,
+    deleteTeam,
     addHousehold,
     updateHousehold,
     deleteHousehold,

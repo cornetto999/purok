@@ -41,11 +41,11 @@ export function AddMemberGuardModal({
   // Parse initial query if provided (e.g. "Arlene Abales")
   const initialParts = initialQuery.trim().split(/\s+/);
   const defaultFirst = initialParts.length > 1 ? initialParts.slice(0, -1).join(" ") : "";
-  const defaultLast = initialParts.length > 1 ? initialParts[initialParts.length - 1] : initialParts[0] || "";
+  const defaultLast = (initialParts.length > 1 ? initialParts[initialParts.length - 1] : initialParts[0]) || "";
 
-  const [firstName, setFirstName] = useState(defaultFirst);
-  const [lastName, setLastName] = useState(defaultLast);
-  const [middleName, setMiddleName] = useState("");
+  const [firstName, setFirstName] = useState<string>(defaultFirst);
+  const [lastName, setLastName] = useState<string>(defaultLast);
+  const [middleName, setMiddleName] = useState<string>("");
   const [hasChecked, setHasChecked] = useState(Boolean(defaultFirst && defaultLast));
 
   const purokById = useMemo(() => new Map(puroks.map((p) => [p.id, p])), [puroks]);

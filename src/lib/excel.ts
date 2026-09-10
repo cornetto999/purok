@@ -191,6 +191,22 @@ export async function importFromExcel(file: File): Promise<DataSet> {
   const hhIdx = new Map<string, number>();
 
   const get = (r: Row, key: string) => String(r[key] ?? "").trim();
+  const getCol = (r: Row, ...candidates: string[]) => {
+    for (const c of candidates) {
+      if (r[c] !== undefined && String(r[c]).trim() !== "") {
+        return String(r[c]).trim();
+      }
+    }
+    const normCandidates = candidates.map((c) => c.toUpperCase().replace(/[^A-Z0-9]/g, ""));
+    for (const [k, v] of Object.entries(r)) {
+      if (v === undefined || v === null || String(v).trim() === "") continue;
+      const normK = k.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (normCandidates.includes(normK)) {
+        return String(v).trim();
+      }
+    }
+    return "";
+  };
 
   rows.forEach((r, i) => {
     let lastName: string, firstName: string, middleName: string;
@@ -203,9 +219,9 @@ export async function importFromExcel(file: File): Promise<DataSet> {
       firstName = parsed.firstName;
       middleName = parsed.middleName;
     } else {
-      lastName = get(r, "Last Name") || get(r, "Last");
-      firstName = get(r, "First Name") || get(r, "First");
-      middleName = get(r, "Middle Name") || get(r, "Middle");
+      lastName = getCol(r, "Last Name", "Last", "Surname", "Family Name");
+      firstName = getCol(r, "First Name", "First", "Given Name");
+      middleName = getCol(r, "Middle Name", "Middle", "MI");
       if (!lastName && !firstName) return;
     }
 
@@ -250,6 +266,8 @@ export async function importFromExcel(file: File): Promise<DataSet> {
     }
 
     const statusField = format === "old" ? "Civil Status" : "Status";
+    const precinctVal = getCol(r, "Precinct", "Precinct No.", "Precinct  No.", "Precinct No", "Precinct Number", "PN", "P.N.");
+    const noVal = getCol(r, "No", "No.", "SN", "S.N.", "#", "Serial No", "Serial Number") || String(i + 1);
 
     members.push({
       id: i + 1,
@@ -257,9 +275,9 @@ export async function importFromExcel(file: File): Promise<DataSet> {
       lastName,
       firstName,
       middleName,
-      precinct: get(r, "Precinct"),
-      no: get(r, "No") || get(r, "No.") || String(i + 1),
-      pn: get(r, "PN"),
+      precinct: precinctVal,
+      no: noVal,
+      pn: precinctVal,
       address: get(r, "Address"),
       code: get(r, "Code"),
       is_purok_leader_indicator: yes(r["PI"]),

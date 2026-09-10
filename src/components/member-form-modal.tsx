@@ -45,7 +45,7 @@ export function MemberFormModal({
   onClose,
   defaultHouseholdId,
 }: {
-  initial?: Member;
+  initial?: Member | undefined;
   householdsData: Household[];
   barangaysData?: Barangay[];
   puroksData?: Purok[];

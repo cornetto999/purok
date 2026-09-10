@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import {
   Accessibility,
   Flag,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { StatCard } from "@/components/stat-card";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
@@ -40,6 +41,25 @@ function DashboardPage() {
   const scCount = members.filter((m) => m.sc).length;
   const pwdCount = members.filter((m) => m.pwd).length;
   const ipCount = members.filter((m) => m.ip).length;
+
+  const teamDistributionData = useMemo(() => {
+    const teamCounts: Record<string, number> = { Unassigned: 0 };
+    members.forEach(m => {
+      if (m.teamId) {
+        const team = state.teams.find(t => t.id === m.teamId);
+        const name = team?.team_name || "Unknown Team";
+        teamCounts[name] = (teamCounts[name] || 0) + 1;
+      } else {
+        teamCounts["Unassigned"] = (teamCounts["Unassigned"] || 0) + 1;
+      }
+    });
+
+    return Object.entries(teamCounts)
+      .filter(([_, count]) => count > 0)
+      .map(([name, count]) => ({ name, value: count }));
+  }, [members, state.teams]);
+
+  const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#64748b'];
 
   return (
     <>
@@ -98,6 +118,61 @@ function DashboardPage() {
             accent="hsl(30, 80%, 55%)"
           />
         </div>
+
+        {teamDistributionData.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-6 text-sm font-semibold text-slate-800">Total Members by Team</h2>
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={teamDistributionData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={80}
+                      outerRadius={110}
+                      paddingAngle={2}
+                      dataKey="value"
+                      stroke="none"
+                    >
+                      {teamDistributionData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip 
+                      formatter={(value: number) => [value, "Members"]}
+                      contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                    />
+                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-6 text-sm font-semibold text-slate-800">Team Distribution Breakdown</h2>
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={teamDistributionData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} />
+                    <RechartsTooltip 
+                      cursor={{ fill: '#f1f5f9' }}
+                      formatter={(value: number) => [value, "Members"]}
+                      contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                    />
+                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                      {teamDistributionData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );

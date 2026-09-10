@@ -37,6 +37,7 @@ export function AppSidebar({
   if (!session) return null;
 
   const isAdmin = session.role === "Admin";
+  const isPurokLeader = session.role === "Purok Leader";
 
   const navItems: NavItem[] = isAdmin
     ? [
@@ -100,14 +101,23 @@ export function AppSidebar({
         },
         {
           to: "/members",
-          label: "Members",
+          label: isPurokLeader ? "Find Members" : "Members",
           icon: <Users className="h-4 w-4" />,
         },
+        ...(isPurokLeader
+          ? [
+              {
+                to: "/member-list",
+                label: "My Member List",
+                icon: <Users className="h-4 w-4" />,
+              },
+            ]
+          : []),
       ];
 
   return (
     <aside
-      className={`hidden shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-200 md:flex ${collapsed ? "w-16" : "w-60"}`}
+      className={`sticky top-0 hidden h-screen shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-200 md:flex ${collapsed ? "w-16" : "w-60"}`}
     >
       {/* Branding */}
       <div
@@ -138,7 +148,7 @@ export function AppSidebar({
 
       {/* Nav links */}
       <nav
-        className={`flex-1 space-y-0.5 text-sm ${collapsed ? "p-2" : "p-3"}`}
+        className={`flex-1 overflow-y-auto space-y-0.5 text-sm ${collapsed ? "p-2" : "p-3"}`}
       >
         {collapsed && (
           <button

@@ -1,12 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { MapPin, Pencil, Plus, Trash2 } from "lucide-react";
+import { MapPin, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
 import { useStore } from "@/lib/store";
-import { memberFullName, type Member } from "@/lib/types";
+import { memberFullName, type Household, type Member } from "@/lib/types";
+import { supabase } from "@/lib/supabase";
 import { AdvancedFilter } from "@/components/advanced-filter";
 import { MemberFormModal } from "@/components/member-form-modal";
 import { MemberDetailPanel } from "@/components/member-detail-panel";
 import { FastEditPurokModal } from "@/components/fast-edit-modal";
+import { EditAndAssignModal } from "@/components/edit-and-assign-modal";
+import { ModalShell } from "@/components/modal-shell";
+import { BARANGAYS_SEED_DATA } from "@/lib/barangay-data";
 
 export const Route = createFileRoute("/_authenticated/members")({
   head: () => ({
@@ -18,11 +22,21 @@ export const Route = createFileRoute("/_authenticated/members")({
   component: MembersPage,
 });
 
-type SortKey = "name" | "pn" | "age" | "status" | "purok" | "household";
+type SortKey =
+  | "name"
+  | "precinct"
+  | "no"
+  | "pn"
+  | "age"
+  | "status"
+  | "purok"
+  | "household"
+  | "team";
 type SortDir = "asc" | "desc";
 type ModalState =
   | { kind: "add-member" }
   | { kind: "edit-member"; data: Member }
+  | { kind: "claim-member"; data: Member; purokId?: number }
   | { kind: "fast-edit-purok"; data: Member }
   | null;
 
@@ -46,12 +60,17 @@ function sectorBadges(m: Member) {
   return badges;
 }
 
-function MembersPage() {
+export function MembersPage({
+  memberListOnly = false,
+}: {
+  memberListOnly?: boolean;
+}) {
   const store = useStore();
   const { state } = store;
   const session = state.session!;
   const isAdmin = session.role === "Admin";
   const isPurokLeader = session.role === "Purok Leader";
+  const isMyMemberList = memberListOnly && isPurokLeader;
 
   // Filters
   const [query, setQuery] = useState("");
@@ -59,6 +78,7 @@ function MembersPage() {
   const [barangayFilter, setBarangayFilter] = useState("all");
   const [purokFilter, setPurokFilter] = useState("all");
   const [sectorFilter, setSectorFilter] = useState("all");
+  const [teamFilter, setTeamFilter] = useState("all");
 
   // Sort
   const [sortKey, setSortKey] = useState<SortKey>("name");
@@ -85,6 +105,65 @@ function MembersPage() {
     () => new Map(state.barangays.map((b) => [b.id, b])),
     [state.barangays],
   );
+  const leaderPurokId = useMemo(() => {
+    if (!isPurokLeader) return null;
+
+    const linkedPurok = state.puroks.find(
+      (purok) => purok.id === session.linkedEntityId,
+    );
+    const leaderNameTokens = session.displayName
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    const nameMatchedPurok = state.puroks.find((purok) => {
+      const purokLeaderName = purok.purokLeaderName.toLowerCase();
+      return leaderNameTokens.every((token) => purokLeaderName.includes(token));
+    });
+
+    if (!linkedPurok || !nameMatchedPurok) {
+      return linkedPurok?.id ?? nameMatchedPurok?.id ?? null;
+    }
+
+    if (linkedPurok.id === nameMatchedPurok.id) return linkedPurok.id;
+
+    // Some older Purok Leader accounts point to a Purok that has households
+    // but no residents assigned to it. Prefer the Purok that actually contains
+    // the leader's assigned residents when the profile name gives us a match.
+    const assignedMemberCount = (purok: Purok) =>
+      state.members.filter((member) => {
+        const household = state.households.find(
+          (item) => item.id === member.householdId,
+        );
+        return (
+          household?.purokId === purok.id ||
+          (member.barangayId === purok.barangayId &&
+            member.code.trim().toLowerCase() === purok.name.trim().toLowerCase())
+        );
+      }).length;
+
+    return assignedMemberCount(nameMatchedPurok) > assignedMemberCount(linkedPurok)
+      ? nameMatchedPurok.id
+      : linkedPurok.id;
+  }, [
+    isPurokLeader,
+    session.displayName,
+    session.linkedEntityId,
+    state.households,
+    state.members,
+    state.puroks,
+  ]);
+  const leaderPurok = useMemo(
+    () => state.puroks.find((purok) => purok.id === leaderPurokId),
+    [leaderPurokId, state.puroks],
+  );
+  const leaderBarangay = useMemo(
+    () =>
+      state.barangays.find(
+        (barangay) => barangay.id === leaderPurok?.barangayId,
+      ),
+    [leaderPurok, state.barangays],
+  );
 
   // All unique last names
   const allLastNames = useMemo(() => {
@@ -104,13 +183,25 @@ function MembersPage() {
   // Scope members by role
   const scopedMembers = useMemo(() => {
     if (isAdmin) return state.members;
-    if (isPurokLeader) {
-      const purokHH = new Set(
+    if (isMyMemberList) {
+      const myHouseholdIds = new Set(
         state.households
-          .filter((h) => h.purokId === session.linkedEntityId)
-          .map((h) => h.id),
+          .filter((household) => household.purokId === leaderPurokId)
+          .map((household) => household.id),
       );
-      return state.members.filter((m) => purokHH.has(m.householdId));
+      return state.members.filter((member) => {
+        const assignedByHousehold = myHouseholdIds.has(member.householdId);
+        const assignedDirectly =
+          member.barangayId === leaderPurok?.barangayId &&
+          member.code.trim().toLowerCase() ===
+            leaderPurok?.name.trim().toLowerCase();
+        return assignedByHousehold || assignedDirectly;
+      });
+    }
+    if (isPurokLeader) {
+      // Purok Leaders use this roster to locate and claim residents, including
+      // those who have not yet been assigned to a purok or barangay household.
+      return state.members;
     }
     // Household Leader
     return state.members.filter(
@@ -120,7 +211,10 @@ function MembersPage() {
     state.members,
     state.households,
     isAdmin,
+    isMyMemberList,
     isPurokLeader,
+    leaderPurokId,
+    leaderPurok,
     session.linkedEntityId,
   ]);
 
@@ -129,8 +223,14 @@ function MembersPage() {
     const keywords = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return scopedMembers.filter((m) => {
       const household = householdById.get(m.householdId);
-      if (!household) return false;
-      const purok = purokById.get(household.purokId);
+      // A claimed resident can be linked directly to a Purok while their
+      // household record is still being synchronized. Keep that resident in
+      // the leader's roster rather than dropping them from the table.
+      const purok = household
+        ? purokById.get(household.purokId)
+        : isMyMemberList
+          ? leaderPurok
+          : undefined;
       if (!purok) return false;
 
       if (
@@ -143,6 +243,13 @@ function MembersPage() {
       if (sectorFilter === "SC" && !m.sc) return false;
       if (sectorFilter === "PWD" && !m.pwd) return false;
       if (sectorFilter === "IP" && !m.ip) return false;
+
+      if (teamFilter !== "all") {
+        if (teamFilter === "unassigned" && m.teamId) return false;
+        if (teamFilter !== "unassigned" && m.teamId !== Number(teamFilter))
+          return false;
+      }
+
       if (
         selectedLastNames.length > 0 &&
         !selectedLastNames.includes(m.lastName)
@@ -151,7 +258,7 @@ function MembersPage() {
 
       if (keywords.length > 0) {
         const text =
-          `${memberFullName(m)} ${m.pn} ${m.precinct} ${m.address}`.toLowerCase();
+          `${memberFullName(m)} ${m.no} ${m.pn} ${m.precinct} ${m.address}`.toLowerCase();
         if (!keywords.every((kw) => text.includes(kw))) return false;
       }
 
@@ -163,9 +270,12 @@ function MembersPage() {
     barangayFilter,
     purokFilter,
     sectorFilter,
+    teamFilter,
     selectedLastNames,
     householdById,
     purokById,
+    isMyMemberList,
+    leaderPurok,
   ]);
 
   // Sort
@@ -178,9 +288,20 @@ function MembersPage() {
         case "name":
           cmp = memberFullName(a).localeCompare(memberFullName(b));
           break;
+        case "precinct":
         case "pn":
-          cmp = a.pn.localeCompare(b.pn);
+          cmp = (a.precinct || a.pn || "").localeCompare(b.precinct || b.pn || "");
           break;
+        case "no": {
+          const numA = parseInt(a.no, 10);
+          const numB = parseInt(b.no, 10);
+          if (!isNaN(numA) && !isNaN(numB)) {
+            cmp = numA - numB;
+          } else {
+            cmp = (a.no || "").localeCompare(b.no || "");
+          }
+          break;
+        }
         case "age":
           cmp = a.age - b.age;
           break;
@@ -205,11 +326,21 @@ function MembersPage() {
           cmp = ha.localeCompare(hb);
           break;
         }
+        case "team": {
+          const ta = a.teamId
+            ? state.teams.find((t) => t.id === a.teamId)?.team_name || ""
+            : "";
+          const tb = b.teamId
+            ? state.teams.find((t) => t.id === b.teamId)?.team_name || ""
+            : "";
+          cmp = ta.localeCompare(tb);
+          break;
+        }
       }
       return cmp * dir;
     });
     return arr;
-  }, [filtered, sortKey, sortDir, householdById, purokById]);
+  }, [filtered, sortKey, sortDir, householdById, purokById, state.teams]);
 
   // Paginate
   const totalPages = Math.max(1, Math.ceil(sorted.length / perPage));
@@ -243,15 +374,32 @@ function MembersPage() {
     if (selected?.id === id) setSelected(null);
   };
 
+  const createHouseholdForLeader = async (
+    data: Omit<Household, "id">,
+  ): Promise<Household | void> => {
+    const { data: created, error } = await supabase
+      .from("households")
+      .insert([data])
+      .select()
+      .single();
+    if (error) throw new Error(`Failed to create household: ${error.message}`);
+    await store.refreshData();
+    return created;
+  };
+
   // Households scoped to current user
   const scopedHouseholds = useMemo(() => {
     if (isAdmin) return state.households;
     if (isPurokLeader)
-      return state.households.filter(
-        (h) => h.purokId === session.linkedEntityId,
-      );
+      return state.households.filter((h) => h.purokId === leaderPurokId);
     return state.households.filter((h) => h.id === session.linkedEntityId);
-  }, [state.households, isAdmin, isPurokLeader, session.linkedEntityId]);
+  }, [
+    state.households,
+    isAdmin,
+    isPurokLeader,
+    leaderPurokId,
+    session.linkedEntityId,
+  ]);
 
   // Sector color for row border
   const rowBorderColor = (m: Member) => {
@@ -264,11 +412,21 @@ function MembersPage() {
   return (
     <>
       <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <h1 className="text-lg font-semibold">Members</h1>
+        <h1 className="text-lg font-semibold">
+          {isMyMemberList
+            ? "My Member List"
+            : isPurokLeader
+              ? "Find Members"
+              : "Members"}
+        </h1>
         <p className="text-sm text-slate-500">
           {isAdmin
             ? "Manage resident records"
-            : `Members in your ${isPurokLeader ? "purok" : "household"}`}
+            : isMyMemberList
+              ? "Residents assigned to your purok"
+              : isPurokLeader
+                ? "Search and claim resident records"
+                : "Members in your household"}
         </p>
       </header>
 
@@ -317,6 +475,15 @@ function MembersPage() {
             setPurokFilter("all");
             setPage(0);
           }}
+          teamOptions={state.teams.map((t) => ({
+            id: t.id,
+            label: t.team_name,
+          }))}
+          teamFilter={teamFilter}
+          onTeamFilterChange={(v) => {
+            setTeamFilter(v);
+            setPage(0);
+          }}
         />
 
         {/* Data table */}
@@ -333,15 +500,27 @@ function MembersPage() {
                   </th>
                   <th
                     className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
-                    onClick={() => toggleSort("pn")}
+                    onClick={() => toggleSort("precinct")}
                   >
-                    PN{sortIcon("pn")}
+                    Precinct{sortIcon("precinct")}
+                  </th>
+                  <th
+                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    onClick={() => toggleSort("no")}
+                  >
+                    No.{sortIcon("no")}
                   </th>
                   <th
                     className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
                     onClick={() => toggleSort("purok")}
                   >
                     Purok{sortIcon("purok")}
+                  </th>
+                  <th
+                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    onClick={() => toggleSort("team")}
+                  >
+                    Team{sortIcon("team")}
                   </th>
                   <th
                     className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
@@ -373,24 +552,33 @@ function MembersPage() {
                   const household = householdById.get(m.householdId);
                   const purok = household
                     ? purokById.get(household.purokId)
-                    : undefined;
+                    : isMyMemberList
+                      ? leaderPurok
+                      : undefined;
                   const badges = sectorBadges(m);
                   return (
                     <tr
                       key={m.id}
-                      className={`border-b border-slate-100 border-l-3 last:border-b-0 transition-colors hover:bg-slate-50 ${rowBorderColor(m)}`}
+                      onClick={() => setSelected(m)}
+                      className={`cursor-pointer border-b border-slate-100 border-l-3 last:border-b-0 transition-colors hover:bg-slate-50 ${rowBorderColor(m)}`}
                     >
-                      <td
-                        className="whitespace-nowrap px-4 py-2.5 font-medium cursor-pointer hover:text-indigo-600"
-                        onClick={() => setSelected(m)}
-                      >
+                      <td className="whitespace-nowrap px-4 py-2.5 font-medium">
                         {memberFullName(m)}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
-                        {m.pn || "—"}
+                      <td className="whitespace-nowrap px-4 py-2.5 text-slate-600 font-mono text-xs">
+                        {m.precinct || m.pn || "—"}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-slate-600 font-mono text-xs">
+                        {m.no || "—"}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
                         {purok?.name.split(" - ")[0] ?? "—"}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
+                        {m.teamId
+                          ? state.teams.find((t) => t.id === m.teamId)
+                              ?.team_name
+                          : "—"}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
                         {household?.householdLeaderName ?? "—"}
@@ -420,9 +608,13 @@ function MembersPage() {
                           <div className="flex items-center gap-1">
                             {isAdmin && (
                               <button
-                                onClick={() =>
-                                  setModal({ kind: "fast-edit-purok", data: m })
-                                }
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setModal({
+                                    kind: "fast-edit-purok",
+                                    data: m,
+                                  });
+                                }}
                                 className="rounded-md p-1 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600"
                                 title="Fast Edit — Move Purok & Barangay"
                               >
@@ -430,17 +622,32 @@ function MembersPage() {
                               </button>
                             )}
                             <button
-                              onClick={() =>
-                                setModal({ kind: "edit-member", data: m })
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setModal({
+                                  kind: isPurokLeader
+                                    ? "claim-member"
+                                    : "edit-member",
+                                  data: m,
+                                });
+                              }}
+                              className="rounded-md p-1 text-slate-400 hover:bg-emerald-50 hover:text-emerald-700"
+                              title={
+                                isPurokLeader
+                                  ? "Claim and assign to household or team"
+                                  : "Full Edit"
                               }
-                              className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                              title="Full Edit"
                             >
-                              <Pencil className="h-3.5 w-3.5" />
+                              {isPurokLeader ? (
+                                <UserPlus className="h-3.5 w-3.5" />
+                              ) : (
+                                <Pencil className="h-3.5 w-3.5" />
+                              )}
                             </button>
                             {isAdmin && (
                               <button
-                                onClick={() => {
+                                onClick={(event) => {
+                                  event.stopPropagation();
                                   if (confirm(`Delete ${memberFullName(m)}?`))
                                     deleteMember(m.id);
                                 }}
@@ -519,9 +726,20 @@ function MembersPage() {
           barangayById={barangayById}
           canManage={isAdmin || isPurokLeader}
           canDelete={isAdmin}
+          editLabel={isPurokLeader ? "Claim & Assign" : undefined}
           onClose={() => setSelected(null)}
-          onEdit={() => setModal({ kind: "edit-member", data: selected })}
-          onFastEdit={isAdmin ? () => setModal({ kind: "fast-edit-purok", data: selected }) : undefined}
+          onEdit={() => {
+            setSelected(null);
+            setModal({
+              kind: isPurokLeader ? "claim-member" : "edit-member",
+              data: selected,
+            });
+          }}
+          onFastEdit={
+            isAdmin
+              ? () => setModal({ kind: "fast-edit-purok", data: selected })
+              : undefined
+          }
           onDelete={() => {
             if (confirm(`Delete ${memberFullName(selected)}?`)) {
               deleteMember(selected.id);
@@ -551,6 +769,48 @@ function MembersPage() {
           onClose={() => setModal(null)}
         />
       )}
+      {modal?.kind === "claim-member" &&
+        (() => {
+          const claimPurok = state.puroks.find(
+            (purok) => purok.id === modal.purokId,
+          );
+          const claimBarangay = state.barangays.find(
+            (barangay) => barangay.id === claimPurok?.barangayId,
+          );
+
+          if (!claimPurok) {
+            return (
+              <ClaimPurokPicker
+                puroks={state.puroks}
+                barangays={state.barangays}
+                onSelect={async (purokId) => {
+                  await store.refreshData();
+                  setModal({ ...modal, purokId });
+                }}
+                onClose={() => setModal(null)}
+              />
+            );
+          }
+
+          return (
+            <EditAndAssignModal
+              member={modal.data}
+              leaderPurok={claimPurok}
+              leaderBarangay={claimBarangay}
+              purokHouseholds={state.households.filter(
+                (household) => household.purokId === claimPurok.id,
+              )}
+              onSave={async (updatedData) => {
+                await store.updateMember(modal.data.id, updatedData);
+                if (selected?.id === modal.data.id) {
+                  setSelected({ ...selected, ...updatedData });
+                }
+              }}
+              onCreateHousehold={createHouseholdForLeader}
+              onClose={() => setModal(null)}
+            />
+          );
+        })()}
       {modal?.kind === "fast-edit-purok" && (
         <FastEditPurokModal
           member={modal.data}
@@ -558,7 +818,9 @@ function MembersPage() {
           puroksData={state.puroks}
           householdsData={state.households}
           onSave={async (memberId, newHouseholdId, newAddress) => {
-            const updatePayload: Partial<Member> = { householdId: newHouseholdId };
+            const updatePayload: Partial<Member> = {
+              householdId: newHouseholdId,
+            };
             if (newAddress) updatePayload.address = newAddress;
             await store.updateMember(memberId, updatePayload);
             if (selected?.id === memberId) {
@@ -570,5 +832,137 @@ function MembersPage() {
         />
       )}
     </>
+  );
+}
+
+function ClaimPurokPicker({
+  puroks,
+  barangays,
+  onSelect,
+  onClose,
+}: {
+  puroks: { id: number; barangayId: number; name: string }[];
+  barangays: { id: number; name: string; barangayCaptainName: string }[];
+  onSelect: (purokId: number) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [selectedBarangayName, setSelectedBarangayName] = useState(
+    () => barangays[0]?.name ?? BARANGAYS_SEED_DATA[0]?.name ?? "",
+  );
+  const [selectedPurokName, setSelectedPurokName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const selectedBarangay = BARANGAYS_SEED_DATA.find(
+    (barangay) => barangay.name === selectedBarangayName,
+  );
+  const availablePurokNames =
+    selectedBarangay?.puroks ??
+    puroks
+      .filter(
+        (purok) =>
+          barangays.find((barangay) => barangay.id === purok.barangayId)
+            ?.name === selectedBarangayName,
+      )
+      .map((purok) => purok.name);
+
+  const handleBarangayChange = (barangayName: string) => {
+    setSelectedBarangayName(barangayName);
+    setSelectedPurokName("");
+  };
+
+  const handleContinue = async () => {
+    if (!selectedBarangayName || !selectedPurokName || saving) return;
+    setSaving(true);
+    try {
+      let barangay = barangays.find(
+        (item) =>
+          item.name.toLowerCase() === selectedBarangayName.toLowerCase(),
+      );
+      if (!barangay) {
+        const { data, error } = await supabase
+          .from("barangays")
+          .insert([{ name: selectedBarangayName, barangayCaptainName: "—" }])
+          .select()
+          .single();
+        if (error || !data) {
+          throw new Error(error?.message || "Could not create barangay.");
+        }
+        barangay = data;
+      }
+
+      let purok = puroks.find(
+        (item) =>
+          item.barangayId === barangay.id &&
+          item.name.toLowerCase() === selectedPurokName.toLowerCase(),
+      );
+      if (!purok) {
+        const { data, error } = await supabase
+          .from("puroks")
+          .insert([
+            {
+              barangayId: barangay.id,
+              name: selectedPurokName,
+              purokLeaderName: "—",
+            },
+          ])
+          .select()
+          .single();
+        if (error || !data) {
+          throw new Error(error?.message || "Could not create purok.");
+        }
+        purok = data;
+      }
+
+      await onSelect(purok.id);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell title="Claim Destination" onClose={onClose}>
+      <p className="mb-4 text-sm text-slate-600">
+        Select the barangay and purok where this resident will be assigned.
+      </p>
+      <div className="space-y-4">
+        <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+          Barangay
+          <select
+            className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            value={selectedBarangayName}
+            onChange={(event) => handleBarangayChange(event.target.value)}
+          >
+            {BARANGAYS_SEED_DATA.map((barangay) => (
+              <option key={barangay.name} value={barangay.name}>
+                {barangay.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+          Purok / Zone / Sitio
+          <select
+            className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            value={selectedPurokName}
+            onChange={(event) => setSelectedPurokName(event.target.value)}
+          >
+            <option value="">Select a purok</option>
+            {availablePurokNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={() => void handleContinue()}
+          disabled={!selectedPurokName || saving}
+          className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {saving ? "Preparing assignment…" : "Continue to Household & Team"}
+        </button>
+      </div>
+    </ModalShell>
   );
 }
