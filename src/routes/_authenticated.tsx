@@ -22,7 +22,7 @@ function AuthenticatedLayout() {
   if (!state.sessionChecked || !state.session) return null;
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-900">
+    <div className="flex min-h-screen bg-grid text-slate-900">
       <AppSidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((collapsed) => !collapsed)}

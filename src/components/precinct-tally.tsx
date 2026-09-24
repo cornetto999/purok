@@ -19,14 +19,22 @@ export function PrecinctTally() {
     let grandRawCount = 0;
 
     members.forEach((m) => {
-      const pn = m.pn?.trim() || "Unassigned";
+      const pn = m.precinct?.trim() || m.pn?.trim() || "Unassigned";
       if (!tally[pn]) {
         tally[pn] = { pl: 0, hl: 0, hm: 0, total: 0, rawCount: 0 };
       }
 
-      const pl = m.is_purok_leader_indicator ? 1 : 0;
-      const hl = m.is_household_leader ? 1 : 0;
-      const hm = m.is_household_member ? 1 : 0;
+      let pl = 0;
+      let hl = 0;
+      let hm = 0;
+
+      if (m.is_purok_leader_indicator) {
+        pl = 1;
+      } else if (m.is_household_leader) {
+        hl = 1;
+      } else if (m.is_household_member) {
+        hm = 1;
+      }
 
       tally[pn].pl += pl;
       tally[pn].hl += hl;

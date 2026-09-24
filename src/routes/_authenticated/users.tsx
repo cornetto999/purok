@@ -49,22 +49,27 @@ function UsersPage() {
 
   return (
     <>
-      <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <h1 className="text-lg font-semibold">Users</h1>
-        <p className="text-sm text-slate-500">Manage user accounts and role assignments</p>
+      <header className="border-b border-slate-200/80 bg-white/90 px-6 py-5 backdrop-blur-sm">
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">Users</h1>
+          <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-200/60">
+            {users.length}
+          </span>
+        </div>
+        <p className="mt-0.5 text-sm text-slate-500">Manage user accounts and role assignments</p>
       </header>
 
       <div className="space-y-6 p-6">
         <div className="flex justify-end">
           <button
             onClick={() => setShowModal(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-700"
+            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-xs font-semibold text-white shadow-sm shadow-indigo-200 transition-all hover:from-indigo-700 hover:to-violet-700 hover:shadow-md active:scale-95"
           >
             <Plus className="h-4 w-4" /> Create User
           </button>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
           <table className="w-full text-left text-sm text-slate-600">
             <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
               <tr>

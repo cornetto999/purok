@@ -84,6 +84,10 @@ export function EditAndAssignModal({
   });
   const [householdRole, setHouseholdRole] = useState<"HL" | "HM">(initialRole);
 
+  // Voting info (editable in case of import errors)
+  const [precinct, setPrecinct] = useState<string>(member.precinct || member.pn || "");
+  const [voterNo, setVoterNo] = useState<string>(member.no || "");
+
   // Demographics
   const [age, setAge] = useState<number | string>(member.age || "");
   const [religion, setReligion] = useState<string>(
@@ -99,7 +103,7 @@ export function EditAndAssignModal({
   const [pwd, setPwd] = useState<boolean>(member.pwd || false);
   const [ip, setIp] = useState<boolean>(member.ip || false);
   const [remarks, setRemarks] = useState<string>(member.remarks || "");
-  const [teamId, setTeamId] = useState<number | null>(member.teamId || null);
+  const [teamId, setTeamId] = useState<number | null>(member.team_id || member.teamId || null);
 
   // Inline Create Household state
   const [isCreatingHousehold, setIsCreatingHousehold] = useState(false);
@@ -150,8 +154,11 @@ export function EditAndAssignModal({
       await onSave({
         householdId: selectedHouseholdId,
         barangayId: leaderPurok.barangayId,
+        purok_id: leaderPurok.id,        // ← ensures member appears in leader's "My Member List"
         team_id: teamId,
         code: leaderPurok.name, // Updated code reflects assignment to this Purok
+        precinct: precinct.trim(),
+        no: voterNo.trim(),
         is_household_leader: householdRole === "HL",
         is_household_member: householdRole === "HM",
         age: Number(age) || 0,
@@ -163,6 +170,7 @@ export function EditAndAssignModal({
         remarks: remarks.trim(),
       });
       onClose();
+
     } catch (error) {
       setSaveError(
         error instanceof Error
@@ -186,10 +194,10 @@ export function EditAndAssignModal({
           <div className="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
             <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-600">
               <Lock className="h-3.5 w-3.5 text-slate-400" />
-              Official Voter Registry (Read-Only)
+              Voter Identity
             </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700">
-              Locked Identity
+            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-semibold text-indigo-700">
+              Update Missing Data
             </span>
           </div>
 
@@ -198,17 +206,25 @@ export function EditAndAssignModal({
               <span className="text-xs font-semibold text-slate-400">
                 PRECINCT
               </span>
-              <p className="font-mono font-semibold text-slate-800">
-                {member.precinct || member.pn || "—"}
-              </p>
+              <input
+                type="text"
+                value={precinct}
+                onChange={(e) => setPrecinct(e.target.value)}
+                placeholder="Enter precinct"
+                className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 font-mono text-sm font-semibold text-slate-800 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+              />
             </div>
             <div>
               <span className="text-xs font-semibold text-slate-400">
                 VOTER NO. (NO)
               </span>
-              <p className="font-mono font-semibold text-slate-800">
-                {member.no || "—"}
-              </p>
+              <input
+                type="text"
+                value={voterNo}
+                onChange={(e) => setVoterNo(e.target.value)}
+                placeholder="Enter voter no"
+                className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 font-mono text-sm font-semibold text-slate-800 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+              />
             </div>
             <div>
               <span className="text-xs font-semibold text-slate-400">

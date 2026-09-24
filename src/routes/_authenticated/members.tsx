@@ -46,17 +46,17 @@ function sectorBadges(m: Member) {
   if (m.sc)
     badges.push({
       label: "SC",
-      cls: "bg-blue-100 text-blue-800 ring-blue-600/20",
+      cls: "bg-blue-50 text-blue-700 ring-blue-500/25",
     });
   if (m.pwd)
     badges.push({
       label: "PWD",
-      cls: "bg-green-100 text-green-800 ring-green-600/20",
+      cls: "bg-emerald-50 text-emerald-700 ring-emerald-500/25",
     });
   if (m.ip)
     badges.push({
       label: "IP",
-      cls: "bg-orange-100 text-orange-800 ring-orange-600/20",
+      cls: "bg-amber-50 text-amber-700 ring-amber-500/25",
     });
   return badges;
 }
@@ -109,9 +109,16 @@ export function MembersPage({
   const leaderPurokId = useMemo(() => {
     if (!isPurokLeader) return null;
 
+    // Primary: use the explicitly linked purok from the user account.
+    // This is set when the Purok Leader account is created/edited and is
+    // the most reliable source of truth.
     const linkedPurok = state.puroks.find(
       (purok) => purok.id === session.linkedEntityId,
     );
+    if (linkedPurok) return linkedPurok.id;
+
+    // Fallback: if linkedEntityId is null or doesn't match any purok,
+    // try to find the purok by the leader's display name.
     const leaderNameTokens = session.displayName
       .trim()
       .toLowerCase()
@@ -122,36 +129,11 @@ export function MembersPage({
       return leaderNameTokens.every((token) => purokLeaderName.includes(token));
     });
 
-    if (!linkedPurok || !nameMatchedPurok) {
-      return linkedPurok?.id ?? nameMatchedPurok?.id ?? null;
-    }
-
-    if (linkedPurok.id === nameMatchedPurok.id) return linkedPurok.id;
-
-    // Some older Purok Leader accounts point to a Purok that has households
-    // but no residents assigned to it. Prefer the Purok that actually contains
-    // the leader's assigned residents when the profile name gives us a match.
-    const assignedMemberCount = (purok: Purok) =>
-      state.members.filter((member) => {
-        const household = state.households.find(
-          (item) => item.id === member.householdId,
-        );
-        return (
-          household?.purokId === purok.id ||
-          (member.barangayId === purok.barangayId &&
-            member.code.trim().toLowerCase() === purok.name.trim().toLowerCase())
-        );
-      }).length;
-
-    return assignedMemberCount(nameMatchedPurok) > assignedMemberCount(linkedPurok)
-      ? nameMatchedPurok.id
-      : linkedPurok.id;
+    return nameMatchedPurok?.id ?? null;
   }, [
     isPurokLeader,
     session.displayName,
     session.linkedEntityId,
-    state.households,
-    state.members,
     state.puroks,
   ]);
   const leaderPurok = useMemo(
@@ -191,8 +173,11 @@ export function MembersPage({
           .map((household) => household.id),
       );
       return state.members.filter((member) => {
-        const assignedByHousehold = myHouseholdIds.has(member.householdId);
-        const assignedDirectly = member.purok_id === leaderPurokId;
+        const assignedByHousehold = myHouseholdIds.has(Number(member.householdId));
+        // Coerce to Number: Supabase may return purok_id as a string
+        const assignedDirectly =
+          member.purok_id != null &&
+          Number(member.purok_id) === leaderPurokId;
         return assignedByHousehold || assignedDirectly;
       });
     }
@@ -229,11 +214,17 @@ export function MembersPage({
         : isMyMemberList
           ? leaderPurok
           : undefined;
-      if (!purok) return false;
+
+      // For "My Member List": if scopedMembers already confirmed this member
+      // belongs to the leader (via householdId or purok_id), don't drop them
+      // just because the purok chain can't be fully resolved — fall back to
+      // leaderPurok so they remain visible.
+      const resolvedPurok = purok ?? (isMyMemberList ? leaderPurok : undefined);
+      if (!resolvedPurok) return false;
 
       if (
         barangayFilter !== "all" &&
-        purok.barangayId !== Number(barangayFilter)
+        resolvedPurok.barangayId !== Number(barangayFilter)
       )
         return false;
       if (purokFilter !== "all" && household?.purokId !== Number(purokFilter))
@@ -243,8 +234,9 @@ export function MembersPage({
       if (sectorFilter === "IP" && !m.ip) return false;
 
       if (teamFilter !== "all") {
-        if (teamFilter === "unassigned" && m.teamId) return false;
-        if (teamFilter !== "unassigned" && m.teamId !== Number(teamFilter))
+        const tid = m.team_id || m.teamId;
+        if (teamFilter === "unassigned" && tid) return false;
+        if (teamFilter !== "unassigned" && tid !== Number(teamFilter))
           return false;
       }
 
@@ -325,11 +317,13 @@ export function MembersPage({
           break;
         }
         case "team": {
-          const ta = a.teamId
-            ? state.teams.find((t) => t.id === a.teamId)?.team_name || ""
+          const tidA = a.team_id || a.teamId;
+          const tidB = b.team_id || b.teamId;
+          const ta = tidA
+            ? state.teams.find((t) => t.id === tidA)?.team_name || ""
             : "";
-          const tb = b.teamId
-            ? state.teams.find((t) => t.id === b.teamId)?.team_name || ""
+          const tb = tidB
+            ? state.teams.find((t) => t.id === tidB)?.team_name || ""
             : "";
           cmp = ta.localeCompare(tb);
           break;
@@ -354,7 +348,7 @@ export function MembersPage({
   };
 
   const sortIcon = (key: SortKey) =>
-    sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+    sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : " ↕";
 
   // CRUD
   const saveMember = (data: Omit<Member, "id">, id?: number) => {
@@ -409,15 +403,20 @@ export function MembersPage({
 
   return (
     <>
-      <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <h1 className="text-lg font-semibold">
-          {isMyMemberList
-            ? "My Member List"
-            : isPurokLeader
-              ? "Find Members"
-              : "Members"}
-        </h1>
-        <p className="text-sm text-slate-500">
+      <header className="border-b border-slate-200/80 bg-white/90 px-6 py-5 backdrop-blur-sm">
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">
+            {isMyMemberList
+              ? "My Member List"
+              : isPurokLeader
+                ? "Find Members"
+                : "Members"}
+          </h1>
+          <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-200/60">
+            {sorted.length.toLocaleString()}
+          </span>
+        </div>
+        <p className="mt-0.5 text-sm text-slate-500">
           {isAdmin
             ? "Manage resident records"
             : isMyMemberList
@@ -433,7 +432,7 @@ export function MembersPage({
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setModal({ kind: "add-member" })}
-            className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-700"
+            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm shadow-indigo-200 transition-all hover:from-indigo-700 hover:to-violet-700 hover:shadow-md hover:shadow-indigo-200 active:scale-95"
           >
             <Plus className="h-3.5 w-3.5" /> Add Member
           </button>
@@ -485,63 +484,63 @@ export function MembersPage({
         />
 
         {/* Data table */}
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr className="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-50/50 text-xs uppercase tracking-wider text-slate-400">
                   <th
-                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    className="px-4 py-3 font-semibold cursor-pointer select-none transition-colors hover:text-indigo-600"
                     onClick={() => toggleSort("name")}
                   >
                     Name{sortIcon("name")}
                   </th>
                   <th
-                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    className="px-4 py-3 font-semibold cursor-pointer select-none transition-colors hover:text-indigo-600"
                     onClick={() => toggleSort("precinct")}
                   >
                     Precinct{sortIcon("precinct")}
                   </th>
                   <th
-                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    className="px-4 py-3 font-semibold cursor-pointer select-none transition-colors hover:text-indigo-600"
                     onClick={() => toggleSort("no")}
                   >
                     No.{sortIcon("no")}
                   </th>
                   <th
-                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    className="px-4 py-3 font-semibold cursor-pointer select-none transition-colors hover:text-indigo-600"
                     onClick={() => toggleSort("purok")}
                   >
                     Purok{sortIcon("purok")}
                   </th>
                   <th
-                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    className="px-4 py-3 font-semibold cursor-pointer select-none transition-colors hover:text-indigo-600"
                     onClick={() => toggleSort("team")}
                   >
                     Team{sortIcon("team")}
                   </th>
                   <th
-                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    className="px-4 py-3 font-semibold cursor-pointer select-none transition-colors hover:text-indigo-600"
                     onClick={() => toggleSort("household")}
                   >
                     Household{sortIcon("household")}
                   </th>
                   <th
-                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    className="px-4 py-3 font-semibold cursor-pointer select-none transition-colors hover:text-indigo-600"
                     onClick={() => toggleSort("age")}
                   >
                     Age{sortIcon("age")}
                   </th>
                   <th
-                    className="px-4 py-2.5 font-semibold cursor-pointer select-none hover:text-slate-700"
+                    className="px-4 py-3 font-semibold cursor-pointer select-none transition-colors hover:text-indigo-600"
                     onClick={() => toggleSort("status")}
                   >
                     Status{sortIcon("status")}
                   </th>
-                  <th className="px-4 py-2.5 font-semibold">Sectors</th>
-                  <th className="px-4 py-2.5 font-semibold">Remarks</th>
+                  <th className="px-4 py-3 font-semibold">Sectors</th>
+                  <th className="px-4 py-3 font-semibold">Remarks</th>
                   {(isAdmin || isPurokLeader) && (
-                    <th className="px-4 py-2.5 font-semibold" />
+                    <th className="px-4 py-3 font-semibold" />
                   )}
                 </tr>
               </thead>
@@ -558,9 +557,9 @@ export function MembersPage({
                     <tr
                       key={m.id}
                       onClick={() => setSelected(m)}
-                      className={`cursor-pointer border-b border-slate-100 border-l-3 last:border-b-0 transition-colors hover:bg-slate-50 ${rowBorderColor(m)}`}
+                      className={`group cursor-pointer border-b border-slate-100/80 border-l-3 last:border-b-0 transition-all hover:bg-indigo-50/30 hover:shadow-[inset_0_0_0_1px_rgba(99,102,241,0.08)] ${rowBorderColor(m)}`}
                     >
-                      <td className="whitespace-nowrap px-4 py-2.5 font-medium">
+                      <td className="whitespace-nowrap px-4 py-2.5 font-semibold text-slate-800 group-hover:text-indigo-700 transition-colors">
                         {memberFullName(m)}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-slate-600 font-mono text-xs">
@@ -573,8 +572,8 @@ export function MembersPage({
                         {purok?.name.split(" - ")[0] ?? "—"}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
-                        {m.teamId
-                          ? state.teams.find((t) => t.id === m.teamId)
+                        {(m.team_id || m.teamId)
+                          ? state.teams.find((t) => t.id === (m.team_id || m.teamId))
                               ?.team_name
                           : "—"}
                       </td>
@@ -664,10 +663,16 @@ export function MembersPage({
                 {paginated.length === 0 && (
                   <tr>
                     <td
-                      colSpan={9}
-                      className="px-4 py-12 text-center text-sm text-slate-400"
+                      colSpan={11}
+                      className="px-4 py-16 text-center"
                     >
-                      No members match the current filters.
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
+                          <svg className="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        </div>
+                        <p className="text-sm font-medium text-slate-500">No members match the current filters</p>
+                        <p className="text-xs text-slate-400">Try adjusting your search or filter criteria</p>
+                      </div>
                     </td>
                   </tr>
                 )}
@@ -676,10 +681,14 @@ export function MembersPage({
           </div>
 
           {/* Footer / pagination */}
-          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-2.5">
-            <p className="text-xs text-slate-500">
-              Showing {paginated.length} of {sorted.length} members (page{" "}
-              {page + 1}/{totalPages})
+          <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/80 px-4 py-2.5">
+            <p className="text-xs text-slate-400">
+              Showing{" "}
+              <span className="font-semibold text-slate-600">{paginated.length}</span>{" "}
+              of{" "}
+              <span className="font-semibold text-slate-600">{sorted.length.toLocaleString()}</span>{" "}
+              members
+              <span className="ml-1 text-slate-300">· page {page + 1} / {totalPages}</span>
             </p>
             <div className="flex items-center gap-2">
               <select
@@ -688,27 +697,27 @@ export function MembersPage({
                   setPerPage(Number(e.target.value));
                   setPage(0);
                 }}
-                className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100"
               >
                 {[25, 50, 100].map((n) => (
                   <option key={n} value={n}>
-                    {n}/page
+                    {n} / page
                   </option>
                 ))}
               </select>
               <button
                 disabled={page === 0}
                 onClick={() => setPage((p) => p - 1)}
-                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:opacity-40 hover:bg-white"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 transition-colors disabled:opacity-35 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600"
               >
-                Prev
+                ← Prev
               </button>
               <button
                 disabled={page >= totalPages - 1}
                 onClick={() => setPage((p) => p + 1)}
-                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:opacity-40 hover:bg-white"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 transition-colors disabled:opacity-35 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600"
               >
-                Next
+                Next →
               </button>
             </div>
           </div>
@@ -769,8 +778,12 @@ export function MembersPage({
       )}
       {modal?.kind === "claim-member" &&
         (() => {
+          // For Purok Leaders: default claim destination is always their own purok.
+          // Use modal.purokId if explicitly set (rare override), otherwise fall back
+          // to leaderPurokId so the picker is skipped automatically.
+          const resolvedPurokId = modal.purokId ?? leaderPurokId ?? undefined;
           const claimPurok = state.puroks.find(
-            (purok) => purok.id === modal.purokId,
+            (purok) => purok.id === resolvedPurokId,
           );
           const claimBarangay = state.barangays.find(
             (barangay) => barangay.id === claimPurok?.barangayId,

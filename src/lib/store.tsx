@@ -288,25 +288,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const addMember = async (data: Omit<Member, "id">) => {
     const precinctVal = data.precinct || data.pn || "";
     // Normalize team field: DB uses snake_case team_id; drop camelCase teamId
-    // Drop barangayId as it's not in the DB schema
-    const { teamId: _teamId, barangayId, ...rest } = data as typeof data & { teamId?: number | null, barangayId?: number };
+    const { teamId: _teamId, ...rest } = data as typeof data & { teamId?: number | null };
     const payload = {
       ...rest,
       precinct: precinctVal,
       pn: precinctVal,
       team_id: rest.team_id ?? _teamId ?? null,
     };
-    const { error } = await supabase.from("members").insert([payload]);
+    const { data: inserted, error } = await supabase.from("members").insert([payload]).select().single();
     if (error) throw new Error(`Could not add member: ${error.message}`);
-    await refreshData();
+    if (inserted) {
+      setState(prev => ({ ...prev, members: [...prev.members, inserted] }));
+    }
   };
   const updateMember = async (
     id: number,
     data: Partial<Omit<Member, "id">>,
   ) => {
     // Normalize team field: DB uses snake_case team_id; drop camelCase teamId
-    // Drop barangayId as it's not in the DB schema
-    const { teamId: _teamId, barangayId, ...rest } = data as typeof data & { teamId?: number | null, barangayId?: number };
+    const { teamId: _teamId, ...rest } = data as typeof data & { teamId?: number | null };
     const patch: Record<string, unknown> = { ...rest };
     if (rest.precinct !== undefined || rest.pn !== undefined) {
       const precinctVal = rest.precinct ?? rest.pn ?? "";
@@ -317,72 +317,77 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (_teamId !== undefined) {
       patch.team_id = _teamId;
     }
-    const { error } = await supabase.from("members").update(patch).eq("id", id);
+    const { data: updated, error } = await supabase.from("members").update(patch).eq("id", id).select().single();
     if (error) throw new Error(`Could not save member: ${error.message}`);
-    await refreshData();
+    if (updated) {
+      setState(prev => ({ ...prev, members: prev.members.map(m => m.id === id ? updated : m) }));
+    }
   };
   const deleteMember = async (id: number) => {
     const { error } = await supabase.from("members").delete().eq("id", id);
-    if (!error) await refreshData();
+    if (!error) {
+      setState(prev => ({ ...prev, members: prev.members.filter(m => m.id !== id) }));
+    }
   };
 
   const addTeam = async (data: Omit<Team, "id">) => {
-    const { error } = await supabase.from("teams").insert([data]);
-    if (!error) await refreshData();
+    const { data: inserted, error } = await supabase.from("teams").insert([data]).select().single();
+    if (!error && inserted) setState(prev => ({ ...prev, teams: [...prev.teams, inserted] }));
   };
   const updateTeam = async (
     id: number,
     data: Partial<Omit<Team, "id">>,
   ) => {
-    const { error } = await supabase.from("teams").update(data).eq("id", id);
-    if (!error) await refreshData();
+    const { data: updated, error } = await supabase.from("teams").update(data).eq("id", id).select().single();
+    if (!error && updated) setState(prev => ({ ...prev, teams: prev.teams.map(t => t.id === id ? updated : t) }));
   };
   const deleteTeam = async (id: number) => {
     const { error } = await supabase.from("teams").delete().eq("id", id);
-    if (!error) await refreshData();
+    if (!error) setState(prev => ({ ...prev, teams: prev.teams.filter(t => t.id !== id) }));
   };
 
   const addHousehold = async (data: Omit<Household, "id">) => {
     const { barangayId, ...rest } = data;
-    const { error } = await supabase.from("households").insert([rest]);
-    if (!error) await refreshData();
+    const { data: inserted, error } = await supabase.from("households").insert([rest]).select().single();
+    if (!error && inserted) setState(prev => ({ ...prev, households: [...prev.households, inserted] }));
   };
   const updateHousehold = async (
     id: number,
     data: Partial<Omit<Household, "id">>,
   ) => {
     const { barangayId, ...rest } = data;
-    const { error } = await supabase
+    const { data: updated, error } = await supabase
       .from("households")
       .update(rest)
-      .eq("id", id);
-    if (!error) await refreshData();
+      .eq("id", id)
+      .select().single();
+    if (!error && updated) setState(prev => ({ ...prev, households: prev.households.map(h => h.id === id ? updated : h) }));
   };
   const deleteHousehold = async (id: number) => {
     const { error } = await supabase.from("households").delete().eq("id", id);
-    if (!error) await refreshData();
+    if (!error) setState(prev => ({ ...prev, households: prev.households.filter(h => h.id !== id) }));
   };
 
   const addPurok = async (data: Omit<Purok, "id">) => {
-    const { error } = await supabase.from("puroks").insert([data]);
-    if (!error) await refreshData();
+    const { data: inserted, error } = await supabase.from("puroks").insert([data]).select().single();
+    if (!error && inserted) setState(prev => ({ ...prev, puroks: [...prev.puroks, inserted] }));
   };
   const updatePurok = async (id: number, data: Partial<Omit<Purok, "id">>) => {
-    const { error } = await supabase.from("puroks").update(data).eq("id", id);
-    if (!error) await refreshData();
+    const { data: updated, error } = await supabase.from("puroks").update(data).eq("id", id).select().single();
+    if (!error && updated) setState(prev => ({ ...prev, puroks: prev.puroks.map(p => p.id === id ? updated : p) }));
   };
   const deletePurok = async (id: number) => {
     const { error } = await supabase.from("puroks").delete().eq("id", id);
-    if (!error) await refreshData();
+    if (!error) setState(prev => ({ ...prev, puroks: prev.puroks.filter(p => p.id !== id) }));
   };
 
   const addUser = async (data: Omit<User, "id">) => {
-    const { error } = await supabase.from("users").insert([data]);
-    if (!error) await refreshData();
+    const { data: inserted, error } = await supabase.from("users").insert([data]).select().single();
+    if (!error && inserted) setState(prev => ({ ...prev, users: [...prev.users, inserted] }));
   };
   const deleteUser = async (id: number) => {
     const { error } = await supabase.from("users").delete().eq("id", id);
-    if (!error) await refreshData();
+    if (!error) setState(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
   };
   const saveHouseholdWithUser = async (
     householdData: Omit<Household, "id">,

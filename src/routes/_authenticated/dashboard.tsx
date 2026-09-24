@@ -63,9 +63,14 @@ function DashboardPage() {
 
   return (
     <>
-      <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <h1 className="text-lg font-semibold">Overview</h1>
-        <p className="text-sm text-slate-500">
+      <header className="border-b border-slate-200/80 bg-white/90 px-6 py-5 backdrop-blur-sm">
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">Overview</h1>
+          <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-200/60">
+            {members.length.toLocaleString()} residents
+          </span>
+        </div>
+        <p className="mt-0.5 text-sm text-slate-500">
           Resident and household records across all puroks
         </p>
       </header>
@@ -149,7 +154,7 @@ function DashboardPage() {
                 </ResponsiveContainer>
               </div>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm">
               <h2 className="mb-6 text-sm font-semibold text-slate-800">Team Distribution Breakdown</h2>
               <div className="h-[300px] w-full">
                 <ResponsiveContainer width="100%" height="100%">

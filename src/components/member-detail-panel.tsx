@@ -22,21 +22,21 @@ function sectorBadges(m: Member) {
       label: "SC",
       fullLabel: "Senior Citizen",
       icon: <Flag className="h-3 w-3" />,
-      className: "bg-blue-100 text-blue-800 ring-blue-600/20",
+      className: "bg-blue-50 text-blue-700 ring-blue-500/25",
     });
   if (m.pwd)
     badges.push({
       label: "PWD",
       fullLabel: "PWD",
       icon: <Accessibility className="h-3 w-3" />,
-      className: "bg-green-100 text-green-800 ring-green-600/20",
+      className: "bg-emerald-50 text-emerald-700 ring-emerald-500/25",
     });
   if (m.ip)
     badges.push({
       label: "IP",
       fullLabel: "Indigenous Person",
       icon: <Users className="h-3 w-3" />,
-      className: "bg-orange-100 text-orange-800 ring-orange-600/20",
+      className: "bg-amber-50 text-amber-700 ring-amber-500/25",
     });
   return badges;
 }
@@ -44,7 +44,7 @@ function sectorBadges(m: Member) {
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-4 px-3 py-2.5 text-sm">
-      <span className="text-slate-500">{label}</span>
+      <span className="text-slate-400 shrink-0">{label}</span>
       <span className="text-right font-medium text-slate-800">
         {value || "—"}
       </span>
@@ -61,10 +61,11 @@ function DetailSection({
 }) {
   return (
     <div>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+      <h3 className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-indigo-500">
+        <span className="inline-block h-px w-3 bg-indigo-300" />
         {title}
       </h3>
-      <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+      <div className="divide-y divide-slate-100/80 rounded-xl border border-slate-100 bg-slate-50/40">
         {children}
       </div>
     </div>
@@ -108,11 +109,11 @@ export function MemberDetailPanel({
         onClick={onClose}
       />
       <div className="absolute right-0 top-0 flex h-full w-full max-w-md flex-col bg-white shadow-2xl animate-in slide-in-from-right duration-200">
-        {/* Header */}
-        <div className="flex items-start justify-between border-b border-slate-200 px-6 py-4">
+      {/* Header */}
+        <div className="flex items-start justify-between border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white px-6 py-5">
           <div>
-            <h2 className="text-base font-semibold">{fullName}</h2>
-            <p className="text-sm text-slate-500">
+            <h2 className="text-base font-bold text-slate-900">{fullName}</h2>
+            <p className="mt-0.5 text-sm text-slate-500">
               Precinct: {member.precinct || member.pn || "—"} {member.no ? `• Voter #${member.no}` : ""}
             </p>
           </div>
@@ -122,7 +123,7 @@ export function MemberDetailPanel({
                 {onFastEdit && (
                   <button
                     onClick={onFastEdit}
-                    className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50/70 px-2.5 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
+                    className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100"
                     title="Quick move to another Purok / Barangay"
                   >
                     <MapPin className="h-3.5 w-3.5" /> Move Purok
@@ -130,7 +131,7 @@ export function MemberDetailPanel({
                 )}
                 <button
                   onClick={onEdit}
-                  className="flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                  className="flex items-center gap-1 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:from-indigo-700 hover:to-violet-700"
                 >
                   <Pencil className="h-3.5 w-3.5" /> {editLabel}
                 </button>
