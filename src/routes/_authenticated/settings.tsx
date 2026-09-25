@@ -87,7 +87,7 @@ function SettingsPage() {
             Excel Import / Export
           </h2>
           <p className="mb-5 text-xs text-slate-500">
-            Import an ENTRY sheet or export the current data.
+            Import Excel resident lists or export the current data.
           </p>
 
           <div className="flex flex-wrap gap-3">
@@ -95,7 +95,7 @@ function SettingsPage() {
               onClick={() => setShowImportModal(true)}
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700"
             >
-              <TableProperties className="h-4 w-4" /> Import ENTRY Sheet
+              <TableProperties className="h-4 w-4" /> Import Excel Files
             </button>
 
             <button

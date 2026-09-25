@@ -16,24 +16,7 @@ import {
   type Session,
 } from "./auth";
 import { supabase } from "./supabase";
-
-const QUERY_PAGE_SIZE = 1000;
-
-async function fetchAllRows<T>(
-  fetchPage: (
-    from: number,
-    to: number,
-  ) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>,
-): Promise<T[]> {
-  const rows: T[] = [];
-  for (let from = 0; ; from += QUERY_PAGE_SIZE) {
-    const { data, error } = await fetchPage(from, from + QUERY_PAGE_SIZE - 1);
-    if (error) throw new Error(error.message);
-    const page = (data ?? []) as unknown as T[];
-    rows.push(...page);
-    if (page.length < QUERY_PAGE_SIZE) return rows;
-  }
-}
+import { fetchAllRows } from "./fetch-all-rows";
 
 export interface AppState {
   barangays: Barangay[];
@@ -46,6 +29,8 @@ export interface AppState {
   session: Session | null;
   sessionChecked: boolean;
   initialized: boolean;
+  loading: boolean;
+  loadError: string | null;
 }
 
 export interface PendingDuplicate {
@@ -116,6 +101,7 @@ interface StoreContextValue {
   deleteUser: (id: number) => Promise<void>;
 
   refreshData: () => Promise<void>;
+  assignLeaderPurok: (purokId: number) => Promise<void>;
   bulkImport: (data: DataSet) => Promise<ImportResult>;
   approveDuplicate: (id: string) => Promise<void>;
   dismissDuplicate: (id: string) => void;
@@ -170,6 +156,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     session: null,
     sessionChecked: false,
     initialized: false,
+    loading: false,
+    loadError: null,
   });
 
   // Hydrate session and pendingDuplicates on client mount to avoid SSR hydration mismatch
@@ -185,34 +173,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshData = useCallback(async () => {
+    setState((prev) => ({ ...prev, loading: true, loadError: null }));
     try {
-      const [b, p, h, m, u] = await Promise.all([
+      const [b, p, h, m, u, t] = await Promise.all([
         fetchAllRows<Barangay>((from, to) =>
-          supabase.from("barangays").select("*").range(from, to),
+          supabase.from("barangays").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
         fetchAllRows<Purok>((from, to) =>
-          supabase.from("puroks").select("*").range(from, to),
+          supabase.from("puroks").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
         fetchAllRows<Household>((from, to) =>
-          supabase.from("households").select("*").range(from, to),
+          supabase.from("households").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
         fetchAllRows<Member>((from, to) =>
-          supabase.from("members").select("*").range(from, to),
+          supabase.from("members").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
         fetchAllRows<User>((from, to) =>
-          supabase.from("users").select("*").range(from, to),
+          supabase.from("users").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
+        // Older databases may not have the optional teams table yet.
+        fetchAllRows<Team>((from, to) =>
+          supabase.from("teams").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
+        ).catch(() => {
+          console.warn("Teams could not be loaded — skipping optional team data.");
+          return [] as Team[];
+        }),
       ]);
 
-      // Fetch teams separately — table may not exist yet if migration hasn't run
-      let t: Team[] = [];
-      try {
-        t = await fetchAllRows<Team>((from, to) =>
-          supabase.from("teams").select("*").range(from, to),
-        );
-      } catch {
-        console.warn("Teams table not found — skipping. Run the migration SQL in Supabase to enable team features.");
-      }
+      const savedSession = getSession();
+      const currentUser = savedSession
+        ? u.find((user) =>
+            user.id === savedSession.userId && user.username === savedSession.username,
+          )
+        : undefined;
+      const session = currentUser ? createSession(currentUser) : savedSession;
 
       setState((prev) => ({
         ...prev,
@@ -222,10 +216,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         members: m,
         users: u,
         teams: t,
+        session,
         initialized: true,
+        loading: false,
+        loadError: null,
       }));
     } catch (err) {
       console.error("Failed to load data from Supabase", err);
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        loadError: "Could not load your records. Check your connection and try again.",
+      }));
     }
   }, []);
 
@@ -284,6 +286,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, session: null }));
   }, []);
 
+  const assignLeaderPurok = async (purokId: number) => {
+    const session = state.session;
+    if (!session || session.role !== "Purok Leader") {
+      throw new Error("Sign in as a Purok Leader to claim members.");
+    }
+    const { data: user, error } = await supabase
+      .from("users")
+      .update({ linked_entity_id: purokId })
+      .eq("id", session.userId)
+      .eq("username", session.username)
+      .eq("role", "Purok Leader")
+      .select()
+      .single();
+    if (error || !user) {
+      throw new Error("Could not link your purok. Sign in again with your current account and retry.");
+    }
+    const updatedSession = createSession(user);
+    setState((prev) => ({
+      ...prev,
+      session: updatedSession,
+      users: prev.users.map((item) => item.id === user.id ? user : item),
+    }));
+  };
+
   // CRUD Implementations
   const addMember = async (data: Omit<Member, "id">) => {
     const precinctVal = data.precinct || data.pn || "";
@@ -310,12 +336,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const patch: Record<string, unknown> = { ...rest };
     if (rest.precinct !== undefined || rest.pn !== undefined) {
       const precinctVal = rest.precinct ?? rest.pn ?? "";
-      patch.precinct = precinctVal;
-      patch.pn = precinctVal;
+      patch["precinct"] = precinctVal;
+      patch["pn"] = precinctVal;
     }
     // If teamId was supplied (camelCase), map it to team_id
     if (_teamId !== undefined) {
-      patch.team_id = _teamId;
+      patch["team_id"] = _teamId;
     }
     const { data: updated, error } = await supabase.from("members").update(patch).eq("id", id).select().single();
     if (error) throw new Error(`Could not save member: ${error.message}`);
@@ -547,16 +573,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const [barangayResult, purokResult, householdResult, memberResult] =
       await Promise.all([
         fetchAllRows<Barangay>((from, to) =>
-          supabase.from("barangays").select("*").range(from, to),
+          supabase.from("barangays").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
         fetchAllRows<Purok>((from, to) =>
-          supabase.from("puroks").select("*").range(from, to),
+          supabase.from("puroks").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
         fetchAllRows<Household>((from, to) =>
-          supabase.from("households").select("*").range(from, to),
+          supabase.from("households").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
         fetchAllRows<Member>((from, to) =>
-          supabase.from("members").select("*").range(from, to),
+          supabase.from("members").select("*", from === 0 ? { count: "exact" } : {}).order("id").range(from, to),
         ),
       ]);
 
@@ -791,6 +817,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addUser,
     deleteUser,
     refreshData,
+    assignLeaderPurok,
     bulkImport,
     approveDuplicate,
     dismissDuplicate,

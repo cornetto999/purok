@@ -1,3 +1,4 @@
+import { readImportRows, readVoterIdentifiers } from "./spreadsheet-columns";
 import type { Barangay, Household, Member, Purok, CivilStatus } from "./types";
 import { memberFullName } from "./types";
 
@@ -57,7 +58,7 @@ export function toRows(data: DataSet): Row[] {
       "Last Name": m.lastName,
       "First Name": m.firstName,
       "Middle Name": m.middleName,
-      Precinct: m.precinct,
+      Precinct: m.precinct || m.pn,
       No: m.no,
       PN: m.pn,
       Code: m.code,
@@ -103,7 +104,7 @@ export async function downloadTemplate() {
         "Middle Name": "Cruz",
         Precinct: "001A",
         No: "1",
-        PN: "0001-A",
+        PN: "001A",
         Code: "",
         PI: "No",
         HL: "Yes",
@@ -174,7 +175,7 @@ export async function importFromExcel(file: File): Promise<DataSet> {
   const book = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const first = book.SheetNames[0];
   if (!first) throw new Error("The file has no sheets.");
-  const rows = XLSX.utils.sheet_to_json<Row>(book.Sheets[first]!, { defval: "" });
+  const rows = readImportRows(XLSX, book.Sheets[first]!);
   if (rows.length === 0) throw new Error("No rows found in the first sheet.");
 
   // Detect format from headers
@@ -266,8 +267,7 @@ export async function importFromExcel(file: File): Promise<DataSet> {
     }
 
     const statusField = format === "old" ? "Civil Status" : "Status";
-    const precinctVal = getCol(r, "Precinct", "Precinct No.", "Precinct  No.", "Precinct No", "Precinct Number", "PN", "P.N.");
-    const noVal = getCol(r, "No", "No.", "SN", "S.N.", "#", "Serial No", "Serial Number") || String(i + 1);
+    const { precinct: precinctVal, no: noVal } = readVoterIdentifiers(r);
 
     members.push({
       id: i + 1,

@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -15,7 +15,10 @@ import {
 import { useStore } from "@/lib/store";
 import { PrecinctTally } from "@/components/precinct-tally";
 import { useTargetVotes } from "@/lib/use-target-votes";
-import { Target, TrendingUp } from "lucide-react";
+import { Target, Pencil } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { TargetVotesDialog } from "@/components/target-votes-dialog";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/reports")({
   head: () => ({
@@ -40,7 +43,10 @@ function ReportsPage() {
   const { state } = useStore();
   const navigate = useNavigate();
   const { barangays, puroks, households, members } = state;
-  const { targets, updateOverall, updateBarangay } = useTargetVotes();
+  const { targets, ready, saveTargets } = useTargetVotes();
+  const [editingTarget, setEditingTarget] = useState<"overall" | number | null>(
+    null,
+  );
 
   useEffect(() => {
     if (state.session?.role !== "Admin") void navigate({ to: "/my-dashboard" });
@@ -48,7 +54,8 @@ function ReportsPage() {
 
   const totalMembers = members.length;
   const overallTarget = targets.overall;
-  const overallProgress = overallTarget > 0 ? (totalMembers / overallTarget) * 100 : 0;
+  const overallProgress =
+    overallTarget > 0 ? (totalMembers / overallTarget) * 100 : 0;
 
   const membersPerPurok = useMemo(() => {
     const householdIdsByPurok = new Map<number, Set<number>>();
@@ -127,13 +134,14 @@ function ReportsPage() {
   return (
     <>
       <header className="border-b border-slate-200/80 bg-white/90 px-6 py-5 backdrop-blur-sm">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Reports</h1>
+        <h1 className="text-xl font-bold tracking-tight text-slate-900">
+          Reports
+        </h1>
         <p className="mt-0.5 text-sm text-slate-500">
           Counts, demographic breakdowns, and precinct analytics
         </p>
       </header>
       <div className="space-y-6 p-6">
-        
         {/* Overall Target Votes Dashboard */}
         <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-4 w-full md:w-auto">
@@ -141,29 +149,41 @@ function ReportsPage() {
               <Target className="h-6 w-6" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Overall Target Votes</h2>
-              <div className="flex items-end gap-2 mt-1">
-                <input
-                  type="number"
-                  value={overallTarget || ""}
-                  onChange={(e) => updateOverall(Number(e.target.value))}
-                  placeholder="Set target..."
-                  className="text-3xl font-black tracking-tight text-slate-800 bg-transparent border-none p-0 focus:ring-0 w-32 placeholder:text-slate-300"
-                />
-              </div>
+              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
+                Overall Target Votes
+              </h2>
+              <p className="mt-1 text-3xl font-bold tracking-tight text-slate-800">
+                {overallTarget > 0 ? overallTarget.toLocaleString() : "Not set"}
+              </p>
+              <Button
+                className="mt-3"
+                size="sm"
+                disabled={!ready}
+                onClick={() => setEditingTarget("overall")}
+              >
+                <Pencil className="h-3.5 w-3.5" /> Set targets
+              </Button>
             </div>
           </div>
-          
+
           <div className="flex-1 w-full max-w-xl flex flex-col justify-center">
             <div className="flex justify-between text-sm font-medium mb-2">
               <span className="text-slate-600">Progress</span>
-              <span className={overallProgress >= 100 ? "text-emerald-600 font-bold" : "text-indigo-600 font-bold"}>
-                {totalMembers.toLocaleString()} / {overallTarget.toLocaleString()} ({overallProgress.toFixed(1)}%)
+              <span
+                className={
+                  overallProgress >= 100
+                    ? "text-emerald-600 font-bold"
+                    : "text-indigo-600 font-bold"
+                }
+              >
+                {overallTarget > 0
+                  ? `${totalMembers.toLocaleString()} / ${overallTarget.toLocaleString()} (${overallProgress.toFixed(1)}%)`
+                  : `${totalMembers.toLocaleString()} members · No target set`}
               </span>
             </div>
             <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden">
-              <div 
-                className={`h-full transition-all duration-500 ${overallProgress >= 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`}
+              <div
+                className={`h-full transition-all duration-500 ${overallProgress >= 100 ? "bg-emerald-500" : "bg-indigo-500"}`}
                 style={{ width: `${Math.min(overallProgress, 100)}%` }}
               />
             </div>
@@ -240,67 +260,100 @@ function ReportsPage() {
             </h2>
             {barangaySummaries.map((barangay) => {
               const target = targets.barangays[barangay.id] || 0;
-              const progress = target > 0 ? (barangay.memberCount / target) * 100 : 0;
+              const progress =
+                target > 0 ? (barangay.memberCount / target) * 100 : 0;
               return (
-              <div
-                key={barangay.id}
-                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex justify-between items-start mb-1">
-                    <p className="font-semibold text-slate-800">{barangay.name}</p>
-                    <div className="flex items-center gap-1 bg-slate-100 rounded-md px-2 py-1">
-                      <TrendingUp className="h-3 w-3 text-slate-500" />
-                      <input 
-                        type="number" 
-                        value={target || ""}
-                        onChange={(e) => updateBarangay(barangay.id, Number(e.target.value))}
-                        placeholder="Target..."
-                        className="w-16 bg-transparent border-none p-0 text-xs font-bold text-slate-700 focus:ring-0 text-right placeholder:text-slate-400 placeholder:font-normal"
-                      />
+                <div
+                  key={barangay.id}
+                  className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex justify-between items-start mb-1">
+                      <p className="font-semibold text-slate-800">
+                        {barangay.name}
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!ready}
+                        aria-label={`Set target for ${barangay.name}`}
+                        onClick={() => setEditingTarget(barangay.id)}
+                      >
+                        <Pencil className="h-3 w-3" />{" "}
+                        {target > 0
+                          ? `Target: ${target.toLocaleString()}`
+                          : "Set target"}
+                      </Button>
                     </div>
-                  </div>
-                  <p className="mb-4 text-xs text-slate-500">
-                    Captain: {barangay.barangayCaptainName}
-                  </p>
-                  
-                  {/* Progress Bar */}
-                  <div className="mb-4">
-                    <div className="flex justify-between text-[10px] font-medium text-slate-500 mb-1.5 uppercase tracking-wide">
-                      <span>Progress</span>
-                      <span className={progress >= 100 ? "text-emerald-600" : "text-indigo-600"}>
-                        {progress.toFixed(1)}%
-                      </span>
-                    </div>
-                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full transition-all duration-500 ${progress >= 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`}
-                        style={{ width: `${Math.min(progress, 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
+                    <p className="mb-4 text-xs text-slate-500">
+                      Captain: {barangay.barangayCaptainName}
+                    </p>
 
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  {(
-                    [
-                      ["Puroks", barangay.purokCount],
-                      ["Households", barangay.householdCount],
-                      ["Members", barangay.memberCount],
-                    ] as const
-                  ).map(([label, count]) => (
-                    <div key={label} className="rounded-lg bg-slate-50 py-2.5 border border-slate-100">
-                      <p className="text-lg font-bold text-slate-700">{count}</p>
-                      <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">{label}</p>
+                    {/* Progress Bar */}
+                    <div className="mb-4">
+                      <div className="flex justify-between text-[10px] font-medium text-slate-500 mb-1.5 uppercase tracking-wide">
+                        <span>Progress</span>
+                        <span
+                          className={
+                            progress >= 100
+                              ? "text-emerald-600"
+                              : "text-indigo-600"
+                          }
+                        >
+                          {target > 0
+                            ? `${barangay.memberCount.toLocaleString()} / ${target.toLocaleString()} (${progress.toFixed(1)}%)`
+                            : "No target set"}
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-500 ${progress >= 100 ? "bg-emerald-500" : "bg-indigo-500"}`}
+                          style={{ width: `${Math.min(progress, 100)}%` }}
+                        />
+                      </div>
                     </div>
-                  ))}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 text-center">
+                    {(
+                      [
+                        ["Puroks", barangay.purokCount],
+                        ["Households", barangay.householdCount],
+                        ["Members", barangay.memberCount],
+                      ] as const
+                    ).map(([label, count]) => (
+                      <div
+                        key={label}
+                        className="rounded-lg bg-slate-50 py-2.5 border border-slate-100"
+                      >
+                        <p className="text-lg font-bold text-slate-700">
+                          {count}
+                        </p>
+                        <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                          {label}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )})}
+              );
+            })}
           </section>
         </div>
         <PrecinctTally />
       </div>
+      {editingTarget !== null && (
+        <TargetVotesDialog
+          targets={targets}
+          barangays={barangays}
+          focusTarget={editingTarget}
+          onSave={(next) => {
+            saveTargets(next);
+            toast.success("Vote targets saved");
+          }}
+          onClose={() => setEditingTarget(null)}
+        />
+      )}
     </>
   );
 }

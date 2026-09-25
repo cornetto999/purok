@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { MapPin, Pencil, Plus, Trash2, UserPlus } from "lucide-react";
 import { useStore } from "@/lib/store";
@@ -12,8 +12,13 @@ import { EditAndAssignModal } from "@/components/edit-and-assign-modal";
 import { ModalShell } from "@/components/modal-shell";
 import { BARANGAYS_SEED_DATA } from "@/lib/barangay-data";
 import { toast } from "sonner";
+import { memberPurokId } from "@/lib/member-assignment";
 
 export const Route = createFileRoute("/_authenticated/members")({
+  validateSearch: (search: Record<string, unknown>): { purok?: string } => {
+    const purok = String(search["purok"] ?? "");
+    return /^\d+$/.test(purok) ? { purok } : {};
+  },
   head: () => ({
     meta: [
       { title: "Members — Barangay RMS" },
@@ -72,12 +77,13 @@ export function MembersPage({
   const isAdmin = session.role === "Admin";
   const isPurokLeader = session.role === "Purok Leader";
   const isMyMemberList = memberListOnly && isPurokLeader;
+  const routeSearch = useSearch({ strict: false });
 
   // Filters
   const [query, setQuery] = useState("");
   const [selectedLastNames, setSelectedLastNames] = useState<string[]>([]);
   const [barangayFilter, setBarangayFilter] = useState("all");
-  const [purokFilter, setPurokFilter] = useState("all");
+  const [purokFilter, setPurokFilter] = useState(routeSearch.purok ?? "all");
   const [sectorFilter, setSectorFilter] = useState("all");
   const [teamFilter, setTeamFilter] = useState("all");
 
@@ -113,7 +119,7 @@ export function MembersPage({
     // This is set when the Purok Leader account is created/edited and is
     // the most reliable source of truth.
     const linkedPurok = state.puroks.find(
-      (purok) => purok.id === session.linkedEntityId,
+      (purok) => session.linkedEntityId != null && Number(purok.id) === Number(session.linkedEntityId),
     );
     if (linkedPurok) return linkedPurok.id;
 
@@ -126,7 +132,7 @@ export function MembersPage({
       .filter(Boolean);
     const nameMatchedPurok = state.puroks.find((purok) => {
       const purokLeaderName = purok.purokLeaderName.toLowerCase();
-      return leaderNameTokens.every((token) => purokLeaderName.includes(token));
+      return leaderNameTokens.length > 0 && leaderNameTokens.every((token) => purokLeaderName.includes(token));
     });
 
     return nameMatchedPurok?.id ?? null;
@@ -167,19 +173,10 @@ export function MembersPage({
   const scopedMembers = useMemo(() => {
     if (isAdmin) return state.members;
     if (isMyMemberList) {
-      const myHouseholdIds = new Set(
-        state.households
-          .filter((household) => household.purokId === leaderPurokId)
-          .map((household) => household.id),
+      if (leaderPurokId == null) return [];
+      return state.members.filter(
+        (member) => memberPurokId(member, householdById) === Number(leaderPurokId),
       );
-      return state.members.filter((member) => {
-        const assignedByHousehold = myHouseholdIds.has(Number(member.householdId));
-        // Coerce to Number: Supabase may return purok_id as a string
-        const assignedDirectly =
-          member.purok_id != null &&
-          Number(member.purok_id) === leaderPurokId;
-        return assignedByHousehold || assignedDirectly;
-      });
     }
     if (isPurokLeader) {
       // Purok Leaders use this roster to locate and claim residents, including
@@ -192,12 +189,11 @@ export function MembersPage({
     );
   }, [
     state.members,
-    state.households,
     isAdmin,
     isMyMemberList,
     isPurokLeader,
     leaderPurokId,
-    leaderPurok,
+    householdById,
     session.linkedEntityId,
   ]);
 
@@ -205,29 +201,14 @@ export function MembersPage({
   const filtered = useMemo(() => {
     const keywords = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return scopedMembers.filter((m) => {
-      const household = householdById.get(m.householdId);
-      // A claimed resident can be linked directly to a Purok while their
-      // household record is still being synchronized. Keep that resident in
-      // the leader's roster rather than dropping them from the table.
-      const purok = household
-        ? purokById.get(household.purokId)
-        : isMyMemberList
-          ? leaderPurok
-          : undefined;
-
-      // For "My Member List": if scopedMembers already confirmed this member
-      // belongs to the leader (via householdId or purok_id), don't drop them
-      // just because the purok chain can't be fully resolved — fall back to
-      // leaderPurok so they remain visible.
-      const resolvedPurok = purok ?? (isMyMemberList ? leaderPurok : undefined);
-      if (!resolvedPurok) return false;
+      const resolvedPurok = purokById.get(memberPurokId(m, householdById) ?? 0);
 
       if (
         barangayFilter !== "all" &&
-        resolvedPurok.barangayId !== Number(barangayFilter)
+        (resolvedPurok?.barangayId ?? m.barangayId) !== Number(barangayFilter)
       )
         return false;
-      if (purokFilter !== "all" && household?.purokId !== Number(purokFilter))
+      if (purokFilter !== "all" && resolvedPurok?.id !== Number(purokFilter))
         return false;
       if (sectorFilter === "SC" && !m.sc) return false;
       if (sectorFilter === "PWD" && !m.pwd) return false;
@@ -264,8 +245,6 @@ export function MembersPage({
     selectedLastNames,
     householdById,
     purokById,
-    isMyMemberList,
-    leaderPurok,
   ]);
 
   // Sort
@@ -300,10 +279,10 @@ export function MembersPage({
           break;
         case "purok": {
           const pa =
-            purokById.get(householdById.get(a.householdId)?.purokId ?? 0)
+            purokById.get(memberPurokId(a, householdById) ?? 0)
               ?.name ?? "";
           const pb =
-            purokById.get(householdById.get(b.householdId)?.purokId ?? 0)
+            purokById.get(memberPurokId(b, householdById) ?? 0)
               ?.name ?? "";
           cmp = pa.localeCompare(pb);
           break;
@@ -547,11 +526,7 @@ export function MembersPage({
               <tbody>
                 {paginated.map((m) => {
                   const household = householdById.get(m.householdId);
-                  const purok = household
-                    ? purokById.get(household.purokId)
-                    : isMyMemberList
-                      ? leaderPurok
-                      : undefined;
+                  const purok = purokById.get(memberPurokId(m, householdById) ?? 0);
                   const badges = sectorBadges(m);
                   return (
                     <tr
@@ -670,8 +645,16 @@ export function MembersPage({
                         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
                           <svg className="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                         </div>
-                        <p className="text-sm font-medium text-slate-500">No members match the current filters</p>
-                        <p className="text-xs text-slate-400">Try adjusting your search or filter criteria</p>
+                        <p className="text-sm font-medium text-slate-500">
+                          {isMyMemberList && scopedMembers.length === 0
+                            ? "No claimed members yet"
+                            : "No members match the current filters"}
+                        </p>
+                        <p className="text-xs text-slate-400">
+                          {isMyMemberList && scopedMembers.length === 0
+                            ? "Claim a resident in Find Members to add them to this list."
+                            : "Try adjusting your search or filter criteria"}
+                        </p>
                       </div>
                     </td>
                   </tr>
@@ -812,6 +795,9 @@ export function MembersPage({
                 (household) => household.purokId === claimPurok.id,
               )}
               onSave={async (updatedData) => {
+                if (session.linkedEntityId !== claimPurok.id) {
+                  await store.assignLeaderPurok(claimPurok.id);
+                }
                 await store.updateMember(modal.data.id, updatedData);
                 if (selected?.id === modal.data.id) {
                   setSelected({ ...selected, ...updatedData });
@@ -904,7 +890,7 @@ function ClaimPurokPicker({
 
       let purok = puroks.find(
         (item) =>
-          item.barangayId === barangay.id &&
+          item.barangayId === barangay!.id &&
           item.name.toLowerCase() === selectedPurokName.toLowerCase(),
       );
       if (!purok) {
@@ -912,7 +898,7 @@ function ClaimPurokPicker({
           .from("puroks")
           .insert([
             {
-              barangayId: barangay.id,
+              barangayId: barangay!.id,
               name: selectedPurokName,
               purokLeaderName: "—",
             },
@@ -925,7 +911,9 @@ function ClaimPurokPicker({
         purok = data;
       }
 
-      await onSelect(purok.id);
+      if (purok) {
+        await onSelect(purok!.id);
+      }
     } finally {
       setSaving(false);
     }

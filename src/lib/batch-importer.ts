@@ -1,8 +1,11 @@
+import { readBatchWorksheet } from "./batch-worksheet";
+import { normalizedHeader, readVoterIdentifiers } from "./spreadsheet-columns";
 import { extractBarangayFromFileName } from "./barangay-data";
 import { normalizePurokName } from "./import-entry-sheet";
 import { supabase } from "./supabase";
 import type { Barangay, Purok, Household, Member, CivilStatus } from "./types";
-import { duplicateKey, type PendingDuplicate } from "./store";
+import { fetchAllRows } from "./fetch-all-rows";
+import { importNameKey, missingVoterIdentifiers } from "./import-identifiers";
 
 export interface BatchItem {
   id: string;
@@ -34,86 +37,12 @@ interface RawEntryRow {
 
 const str = (v: unknown): string => String(v ?? "").trim();
 const hasValue = (v: unknown): boolean => str(v) !== "";
-const normalizedHeader = (header: string): string =>
-  header.toUpperCase().replace(/[^A-Z0-9]/g, "");
-
-export function findPrecinct(norm: Record<string, string>, raw: Record<string, unknown>): string {
-  // 1. Direct candidate normalized names:
-  const directMatches = [
-    "PRECINCTNO",
-    "PRECINCT",
-    "PRECINCTNUMBER",
-    "PRECINCTID",
-    "PN",
-    "PRECNO",
-    "PCTNO",
-    "PRCNTNO",
-    "VOTERSPRECINCT",
-    "VOTERPRECINCT",
-    "CLUSTEREDPRECINCT",
-    "ESTABLISHEDPRECINCT",
-  ];
-  for (const k of directMatches) {
-    if (norm[k]) return norm[k];
-  }
-
-  // 2. Normalized key fuzzy check:
-  for (const [k, v] of Object.entries(norm)) {
-    if (!v) continue;
-    if (k.includes("PRECINCT") || k.includes("PRCNT") || k === "PN" || k.startsWith("PCT") || k.startsWith("PREC")) {
-      return v;
-    }
-  }
-
-  // 3. Raw keys check (case-insensitive):
-  for (const [rawKey, rawVal] of Object.entries(raw)) {
-    const v = str(rawVal);
-    if (!v) continue;
-    const clean = rawKey.trim().toLowerCase();
-    if (clean.includes("precinct") || clean.includes("prcnt") || clean.startsWith("pct") || clean === "pn" || clean.startsWith("prec")) {
-      return v;
-    }
-  }
-
-  return "";
-}
-
-export function findSerialNo(norm: Record<string, string>, raw: Record<string, unknown>): string {
-  // Direct candidate normalized names:
-  const directMatches = [
-    "NO",
-    "SN",
-    "SERIALNO",
-    "SERIALNUMBER",
-    "VOTERNO",
-    "VOTERNUMBER",
-    "SEQNO",
-    "SEQUENCENO",
-  ];
-  for (const k of directMatches) {
-    if (norm[k]) return norm[k];
-  }
-
-  // Raw keys check:
-  for (const [rawKey, rawVal] of Object.entries(raw)) {
-    const v = str(rawVal);
-    if (!v) continue;
-    const clean = rawKey.trim().toLowerCase();
-    if (clean === "no" || clean === "no." || clean === "#" || clean === "sn" || clean === "s.n." || clean.includes("serial") || clean.includes("voter no")) {
-      return v;
-    }
-  }
-
-  return "";
-}
-
-function readColumn(
-  row: Record<string, string>,
-  ...headers: string[]
-): string {
-  return headers
-    .map((header) => row[normalizedHeader(header)] ?? "")
-    .find((value) => value !== "") ?? "";
+function readColumn(row: Record<string, string>, ...headers: string[]): string {
+  return (
+    headers
+      .map((header) => row[normalizedHeader(header)] ?? "")
+      .find((value) => value !== "") ?? ""
+  );
 }
 
 export function isExcelFile(file: File): boolean {
@@ -157,12 +86,21 @@ export async function processSingleFile(
   duplicateCount: number;
 }> {
   // Step 1: Identify Barangay
-  const barangayName = (targetBarangayOverride || item.targetBarangay || item.detectedBarangay).trim();
+  const barangayName = (
+    targetBarangayOverride ||
+    item.targetBarangay ||
+    item.detectedBarangay
+  ).trim();
 
   // Edge case: Validate file format
   if (!isExcelFile(item.file)) {
     throw new Error("Invalid file format. Please upload .xlsx or .xls file.");
   }
+
+  // Validate worksheet structure before making any database changes.
+  const XLSX = await import("xlsx");
+  const book = XLSX.read(await item.file.arrayBuffer(), { type: "array" });
+  const { rows: rawJson } = readBatchWorksheet(XLSX, book);
 
   // Step 2: Database Check / Auto-Create Barangay
   const { data: existingB, error: bFindErr } = await supabase
@@ -187,55 +125,11 @@ export async function processSingleFile(
       .single();
 
     if (bCreateErr || !createdB) {
-      throw new Error(`Failed to create barangay "${barangayName}": ${bCreateErr?.message}`);
+      throw new Error(
+        `Failed to create barangay "${barangayName}": ${bCreateErr?.message}`,
+      );
     }
     barangayId = createdB.id;
-  }
-
-  // Step 3: Parse sheet named "ENTRY"
-  const XLSX = await import("xlsx");
-  const buffer = await item.file.arrayBuffer();
-  const book = XLSX.read(buffer, { type: "array" });
-
-  const entrySheetName = book.SheetNames.find(
-    (n) => n.toUpperCase().trim() === "ENTRY",
-  );
-
-  if (!entrySheetName) {
-    throw new Error("Missing ENTRY sheet");
-  }
-
-  const sheet = book.Sheets[entrySheetName]!;
-  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-
-  // Dynamically detect header row in case of top title/banner rows
-  let headerRowIndex = 0;
-  for (let r = 0; r < Math.min(10, aoa.length); r++) {
-    const rowCells = (aoa[r] || []).map((c) => String(c ?? "").trim().toUpperCase());
-    const hasVoterHeader = rowCells.some((c) =>
-      c.includes("PRECINCT") ||
-      c.includes("LAST") ||
-      c.includes("FIRST") ||
-      c === "PN" ||
-      c === "SN" ||
-      c === "NO" ||
-      c === "NO." ||
-      c.includes("VOTER") ||
-      c.includes("NAME")
-    );
-    if (hasVoterHeader) {
-      headerRowIndex = r;
-      break;
-    }
-  }
-
-  const rawJson = XLSX.utils.sheet_to_json<Record<string, unknown>>(
-    sheet,
-    { range: headerRowIndex, defval: "" },
-  );
-
-  if (rawJson.length === 0) {
-    throw new Error("Empty ENTRY sheet");
   }
 
   const rows: RawEntryRow[] = rawJson.map((raw) => {
@@ -243,10 +137,18 @@ export async function processSingleFile(
     for (const [k, v] of Object.entries(raw)) {
       norm[normalizedHeader(k)] = str(v);
     }
+    const identifiers = readVoterIdentifiers(raw);
     return {
-      PN: findPrecinct(norm, raw),
-      SN: findSerialNo(norm, raw),
-      LAST: readColumn(norm, "LAST", "Last Name", "Surname", "Family Name", "Apelyido"),
+      PN: identifiers.precinct,
+      SN: identifiers.no,
+      LAST: readColumn(
+        norm,
+        "LAST",
+        "Last Name",
+        "Surname",
+        "Family Name",
+        "Apelyido",
+      ),
       FIRST: readColumn(norm, "FIRST", "First Name", "Given Name"),
       MIDDLE: readColumn(norm, "MIDDLE", "Middle Name", "MI", "Middle Initial"),
       ADDRESS: readColumn(norm, "ADDRESS", "Voter Address", "Residence"),
@@ -254,7 +156,13 @@ export async function processSingleFile(
       PL: readColumn(norm, "PL"),
       HL: readColumn(norm, "HL"),
       HM: readColumn(norm, "HM"),
-      REMARKS: readColumn(norm, "REMARKS", "Remarks / Notes", "Remarks", "Notes"),
+      REMARKS: readColumn(
+        norm,
+        "REMARKS",
+        "Remarks / Notes",
+        "Remarks",
+        "Notes",
+      ),
     };
   });
 
@@ -312,7 +220,9 @@ export async function processSingleFile(
         .single();
 
       if (pInsertErr || !newP) {
-        throw new Error(`Failed to insert purok "${pName}": ${pInsertErr?.message}`);
+        throw new Error(
+          `Failed to insert purok "${pName}": ${pInsertErr?.message}`,
+        );
       }
       purokIdMap.set(pName, newP.id);
     }
@@ -371,7 +281,8 @@ export async function processSingleFile(
     if (!row || (!row.LAST && !row.FIRST)) continue;
 
     const normCode = normalizePurokName(row.CODE);
-    const pId = purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0] || 0;
+    const pId =
+      purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0] || 0;
 
     if (hasValue(row.HL)) {
       const fullName = [row.LAST, row.FIRST, row.MIDDLE].filter(Boolean);
@@ -423,7 +334,8 @@ export async function processSingleFile(
     if (!row || (!row.LAST && !row.FIRST)) continue;
 
     const normCode = normalizePurokName(row.CODE);
-    const pId = purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0] || 0;
+    const pId =
+      purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0] || 0;
 
     if (rowIndexToHouseholdId.has(i)) {
       currentActiveHouseholdId = rowIndexToHouseholdId.get(i)!;
@@ -431,7 +343,10 @@ export async function processSingleFile(
       currentActiveHouseholdId = defaultHouseholdPerPurok.get(pId) ?? null;
     }
 
-    const hId = currentActiveHouseholdId || (pId ? defaultHouseholdPerPurok.get(pId) : null) || 1;
+    const hId =
+      currentActiveHouseholdId ||
+      (pId ? defaultHouseholdPerPurok.get(pId) : null) ||
+      1;
 
     memberList.push({
       householdId: hId,
@@ -459,36 +374,43 @@ export async function processSingleFile(
 
   // Step 5: Commit Members with smart update / upsert
   // Fetch existing members in this barangay to avoid duplicates and update missing precinct / no
-  const { data: existingMembers } = await supabase
-    .from("members")
-    .select("id, lastName, firstName, middleName, precinct, no, pn")
-    .eq("barangayId", barangayId);
+  type ExistingMember = Pick<
+    Member,
+    "id" | "lastName" | "firstName" | "middleName" | "precinct" | "no" | "pn"
+  >;
+  const existingMembers = await fetchAllRows<ExistingMember>((from, to) =>
+    supabase
+      .from("members")
+      .select(
+        "id, lastName, firstName, middleName, precinct, no, pn",
+        from === 0 ? { count: "exact" } : {},
+      )
+      .eq("barangayId", barangayId)
+      .order("id")
+      .range(from, to),
+  );
 
-  const existingMap = new Map<string, { id: number; precinct: string; no: string; pn: string }>();
-  if (existingMembers) {
-    for (const em of existingMembers) {
-      const key = `${em.lastName.trim().toLowerCase()}|${em.firstName.trim().toLowerCase()}`;
-      if (!existingMap.has(key)) {
-        existingMap.set(key, em);
-      }
-    }
+  const existingMap = new Map<string, ExistingMember[]>();
+  for (const member of existingMembers) {
+    const key = importNameKey(member);
+    const matches = existingMap.get(key) ?? [];
+    matches.push(member);
+    existingMap.set(key, matches);
   }
 
   const toUpdate: { id: number; patch: Partial<Member> }[] = [];
   const toInsert: Omit<Member, "id">[] = [];
 
   for (const m of memberList) {
-    const key = `${m.lastName.trim().toLowerCase()}|${m.firstName.trim().toLowerCase()}`;
-    const existing = existingMap.get(key);
+    const matches = existingMap.get(importNameKey(m)) ?? [];
+    if (matches.length > 1) {
+      throw new Error(
+        `Multiple existing records match ${m.lastName}, ${m.firstName} ${m.middleName}. Resolve the duplicate records before re-importing.`,
+      );
+    }
+    const existing = matches[0];
     if (existing) {
-      const patch: Partial<Member> = {};
-      if ((!existing.precinct || existing.precinct === "") && m.precinct) {
-        patch.precinct = m.precinct;
-        patch.pn = m.precinct;
-      }
-      if ((!existing.no || existing.no === "") && m.no) {
-        patch.no = m.no;
-      }
+      const patch = missingVoterIdentifiers(existing, m);
       if (Object.keys(patch).length > 0) {
         toUpdate.push({ id: existing.id, patch });
       }
@@ -499,7 +421,12 @@ export async function processSingleFile(
 
   // Execute updates
   for (const item of toUpdate) {
-    await supabase.from("members").update(item.patch).eq("id", item.id);
+    const { error } = await supabase
+      .from("members")
+      .update(item.patch)
+      .eq("id", item.id);
+    if (error)
+      throw new Error(`Failed to update member identifiers: ${error.message}`);
   }
 
   // Execute inserts in chunks
@@ -531,7 +458,11 @@ export async function processBatchUpload(
   items: BatchItem[],
   onProgress: (itemId: string, patch: Partial<BatchItem>) => void,
   isCancelled: () => boolean,
-): Promise<{ successfulCount: number; failedCount: number; totalMembers: number }> {
+): Promise<{
+  successfulCount: number;
+  failedCount: number;
+  totalMembers: number;
+}> {
   let successfulCount = 0;
   let failedCount = 0;
   let totalMembers = 0;

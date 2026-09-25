@@ -22,6 +22,7 @@ import {
 } from "@/lib/batch-importer";
 import { BARANGAYS_SEED_DATA } from "@/lib/barangay-data";
 import { useStore } from "@/lib/store";
+import { ImportProgress } from "@/components/import-progress";
 
 export function ImportDataModal({ onClose }: { onClose: () => void }) {
   const store = useStore();
@@ -39,7 +40,9 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
   const allBarangayOptions = Array.from(
     new Set([
       ...BARANGAYS_SEED_DATA.map((b) => b.name),
-      ...store.state.barangays.map((b) => b.name).filter((n) => n !== "Imported Barangay"),
+      ...store.state.barangays
+        .map((b) => b.name)
+        .filter((n) => n !== "Imported Barangay"),
     ]),
   );
 
@@ -66,7 +69,9 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
 
     setQueue((prev) => {
       // Avoid duplicate file names if identical
-      const existingNames = new Set(prev.map((i) => `${i.fileName}-${i.file.size}`));
+      const existingNames = new Set(
+        prev.map((i) => `${i.fileName}-${i.file.size}`),
+      );
       const newItems = validFiles
         .filter((f) => !existingNames.has(`${f.name}-${f.size}`))
         .map(createBatchItem);
@@ -113,9 +118,7 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
   const handleTargetBarangayChange = (itemId: string, newBarangay: string) => {
     setQueue((prev) =>
       prev.map((item) =>
-        item.id === itemId
-          ? { ...item, targetBarangay: newBarangay }
-          : item,
+        item.id === itemId ? { ...item, targetBarangay: newBarangay } : item,
       ),
     );
   };
@@ -127,7 +130,7 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
 
   const handleClearCompleted = () => {
     if (isProcessing) return;
-    setQueue((prev) => prev.filter((item) => item.status === "pending"));
+    setQueue((prev) => prev.filter((item) => item.status !== "success"));
   };
 
   const handleClearAll = () => {
@@ -145,6 +148,13 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
     if (pendingItems.length === 0 || isProcessing) return;
 
     setIsProcessing(true);
+    setQueue((prev) =>
+      prev.map((item) =>
+        item.status === "failed"
+          ? { ...item, status: "pending", errorMessage: "" }
+          : item,
+      ),
+    );
     isCancelledRef.current = false;
 
     const onProgress = (itemId: string, patch: Partial<BatchItem>) => {
@@ -154,11 +164,7 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
     };
 
     try {
-      await processBatchUpload(
-        queue,
-        onProgress,
-        () => isCancelledRef.current,
-      );
+      await processBatchUpload(queue, onProgress, () => isCancelledRef.current);
     } finally {
       setIsProcessing(false);
       // Refresh local store with all newly added records
@@ -178,6 +184,7 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
   const successCount = queue.filter((i) => i.status === "success").length;
   const failedCount = queue.filter((i) => i.status === "failed").length;
   const totalImportedMembers = queue.reduce((acc, i) => acc + i.memberCount, 0);
+  const activeFile = queue.find((item) => item.status === "processing");
 
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -210,7 +217,8 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
                 Bulk Multi-Barangay Importer
               </h2>
               <p className="text-xs text-slate-500">
-                Upload multiple RV_[Barangay].xlsx files at once for automatic relational mapping.
+                Upload multiple resident spreadsheets at once for automatic
+                relational mapping.
               </p>
             </div>
           </div>
@@ -227,42 +235,51 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Dropzone */}
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => !isProcessing && fileInputRef.current?.click()}
-            className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-7 text-center transition-all cursor-pointer ${
-              isDragging
-                ? "border-indigo-500 bg-indigo-50/60 scale-[1.005]"
-                : "border-slate-300 bg-slate-50/50 hover:border-indigo-400 hover:bg-slate-50"
-            } ${isProcessing ? "opacity-60 cursor-not-allowed" : ""}`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".xlsx,.xls"
-              onChange={handleFileChange}
-              className="hidden"
-              disabled={isProcessing}
+          {isProcessing ? (
+            <ImportProgress
+              fileName={activeFile?.fileName}
+              completedFiles={successCount + failedCount}
+              totalFiles={totalFiles}
             />
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-100/70 text-indigo-600 shadow-sm">
-              <Upload className="h-6 w-6" />
-            </div>
-            <p className="mt-3 text-sm font-semibold text-slate-800">
-              Drop multiple RV Excel files here, or{" "}
-              <span className="text-indigo-600 underline decoration-indigo-300 underline-offset-2">
-                browse files
+          ) : (
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={() => !isProcessing && fileInputRef.current?.click()}
+              className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-7 text-center transition-all cursor-pointer ${
+                isDragging
+                  ? "border-indigo-500 bg-indigo-50/60 scale-[1.005]"
+                  : "border-slate-300 bg-slate-50/50 hover:border-indigo-400 hover:bg-slate-50"
+              } ${isProcessing ? "opacity-60 cursor-not-allowed" : ""}`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".xlsx,.xls"
+                onChange={handleFileChange}
+                className="hidden"
+                disabled={isProcessing}
+              />
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-100/70 text-indigo-600 shadow-sm">
+                <Upload className="h-6 w-6" />
+              </div>
+              <p className="mt-3 text-sm font-semibold text-slate-800">
+                Drop multiple Excel files here, or{" "}
+                <span className="text-indigo-600 underline decoration-indigo-300 underline-offset-2">
+                  browse files
+                </span>
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Supports multiple files (e.g. <code>RV_BURNAY.xlsx</code>,{" "}
+                <code>RV_COGON.xlsx</code>, <code>RV_POBLACION.xlsx</code>).
+              </p>
+              <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-slate-200/60 px-2.5 py-0.5 text-[11px] font-medium text-slate-600">
+                Accepts .xlsx and .xls · Worksheet detected automatically
               </span>
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              Supports multiple files (e.g. <code>RV_BURNAY.xlsx</code>, <code>RV_COGON.xlsx</code>, <code>RV_POBLACION.xlsx</code>).
-            </p>
-            <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-slate-200/60 px-2.5 py-0.5 text-[11px] font-medium text-slate-600">
-              Accepts .xlsx and .xls with "ENTRY" sheet
-            </span>
-          </div>
+            </div>
+          )}
 
           {/* Ignored non-excel files notice */}
           {ignoredCount > 0 && (
@@ -270,7 +287,8 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0" />
                 <span>
-                  Ignored {ignoredCount} non-Excel file(s). Only .xlsx and .xls files are processed.
+                  Ignored {ignoredCount} non-Excel file(s). Only .xlsx and .xls
+                  files are processed.
                 </span>
               </div>
               <button
@@ -289,7 +307,9 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
                 <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
                   <span>
-                    Queue: <strong className="text-slate-900">{totalFiles}</strong> files
+                    Queue:{" "}
+                    <strong className="text-slate-900">{totalFiles}</strong>{" "}
+                    files
                   </span>
                   {pendingCount > 0 && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-slate-700 text-[11px]">
@@ -322,12 +342,16 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
                 <div className="flex items-center gap-2">
                   {!isProcessing ? (
                     <>
-                      {pendingCount > 0 && (
+                      {pendingCount + failedCount > 0 && (
                         <button
                           onClick={() => void handleStartBatch()}
                           className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 active:scale-95 transition-all"
                         >
-                          <Play className="h-3.5 w-3.5 fill-white" /> Start Batch Import ({pendingCount})
+                          <Play className="h-3.5 w-3.5 fill-white" />
+                          {failedCount > 0
+                            ? "Retry / Start Import"
+                            : "Start Batch Import"}{" "}
+                          ({pendingCount + failedCount})
                         </button>
                       )}
                       {successCount > 0 && (
@@ -414,16 +438,22 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
 
                             {/* Detected Barangay */}
                             <td className="px-4 py-3">
-                              {isPending ? (
+                              {(isPending || isFailed) && !isProcessing ? (
                                 <select
                                   value={item.targetBarangay}
+                                  disabled={isProcessing}
                                   onChange={(e) =>
-                                    handleTargetBarangayChange(item.id, e.target.value)
+                                    handleTargetBarangayChange(
+                                      item.id,
+                                      e.target.value,
+                                    )
                                   }
                                   className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-800 shadow-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-200"
                                 >
                                   {/* Include current detected name if not in standard list */}
-                                  {!allBarangayOptions.includes(item.targetBarangay) && (
+                                  {!allBarangayOptions.includes(
+                                    item.targetBarangay,
+                                  ) && (
                                     <option value={item.targetBarangay}>
                                       {item.targetBarangay} (New)
                                     </option>
@@ -453,9 +483,13 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
                                   Importing...
                                 </span>
                               ) : isFailed ? (
-                                <span className="text-xs text-slate-400">—</span>
+                                <span className="text-xs text-slate-400">
+                                  —
+                                </span>
                               ) : (
-                                <span className="text-xs text-slate-400">Queued</span>
+                                <span className="text-xs text-slate-400">
+                                  Queued
+                                </span>
                               )}
                             </td>
 
@@ -468,21 +502,27 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
                               )}
                               {isProc && (
                                 <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
-                                  <Loader2 className="h-3 w-3 animate-spin" /> Processing
+                                  <Loader2 className="h-3 w-3 animate-spin" />{" "}
+                                  Processing
                                 </span>
                               )}
                               {isSuccess && (
                                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
-                                  <CheckCircle className="h-3.5 w-3.5 text-emerald-600" /> Success
+                                  <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />{" "}
+                                  Success
                                 </span>
                               )}
                               {isFailed && (
                                 <div className="space-y-0.5">
                                   <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
-                                    <AlertTriangle className="h-3.5 w-3.5 text-red-600" /> Failed
+                                    <AlertTriangle className="h-3.5 w-3.5 text-red-600" />{" "}
+                                    Failed
                                   </span>
                                   {item.errorMessage && (
-                                    <p className="text-[11px] text-red-600 max-w-[200px] truncate" title={item.errorMessage}>
+                                    <p
+                                      className="text-[11px] text-red-600 max-w-[260px] whitespace-normal break-words"
+                                      title={item.errorMessage}
+                                    >
                                       {item.errorMessage}
                                     </p>
                                   )}
@@ -518,7 +558,21 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
             <div className="text-xs text-indigo-900 space-y-1">
               <p className="font-semibold">Relational Mapping & Safety</p>
               <p className="text-indigo-800 leading-relaxed">
-                For each uploaded file, the importer will check if the Barangay exists in the database (or auto-create it), extract Puroks from the <code>CODE</code> column, create Households from <code>HL</code> (Household Leader) entries, and map all <code>HM</code> members directly to their corresponding Household and Barangay. If any file fails (e.g. missing ENTRY sheet), other files will continue processing safely.
+                Include <strong>Precinct</strong> (or <code>PN</code>) and{" "}
+                <strong>No.</strong> (or <code>SN</code>) in your sheet to fill
+                both member-list columns. Leading zeros are preserved.
+                Re-importing fills missing values for matching residents without
+                replacing saved values.
+              </p>
+              <p className="text-indigo-800 leading-relaxed">
+                For each uploaded file, the importer will check if the Barangay
+                exists in the database (or auto-create it), extract Puroks from
+                the <code>CODE</code> column, create Households from{" "}
+                <code>HL</code> (Household Leader) entries, and map all{" "}
+                <code>HM</code> members directly to their corresponding
+                Household and Barangay. ENTRY is preferred; otherwise, a
+                worksheet with resident name columns is detected automatically.
+                If any file fails, other files will continue processing.
               </p>
             </div>
           </div>
@@ -527,13 +581,17 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-4">
           <p className="text-xs text-slate-500">
-            {successCount > 0
-              ? `${successCount} of ${totalFiles} files imported (${totalImportedMembers.toLocaleString()} residents added)`
-              : "Ready to process RV spreadsheets"}
+            {isProcessing
+              ? "Importing spreadsheets — please keep this window open."
+              : successCount > 0
+                ? `${successCount} of ${totalFiles} files imported (${totalImportedMembers.toLocaleString()} residents added)`
+                : failedCount > 0
+                  ? "Some files failed. Review the error and retry the import."
+                  : "Ready to process spreadsheets"}
           </p>
 
           <div className="flex items-center gap-2">
-            {successCount > 0 && (
+            {!isProcessing && successCount > 0 && (
               <button
                 onClick={() => {
                   onClose();

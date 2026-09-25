@@ -1,3 +1,4 @@
+import { normalizedHeader, readImportRows, readVoterIdentifiers } from "./spreadsheet-columns";
 /**
  * Excel "ENTRY" Sheet Importer
  *
@@ -43,9 +44,6 @@ export interface ImportSummary {
 
 const str = (v: unknown): string => String(v ?? "").trim();
 const hasValue = (v: unknown): boolean => str(v) !== "";
-const normalizedHeader = (header: string): string =>
-  header.toUpperCase().replace(/[^A-Z0-9]/g, "");
-
 function readColumn(
   row: Record<string, string>,
   ...headers: string[]
@@ -53,66 +51,6 @@ function readColumn(
   return headers
     .map((header) => row[normalizedHeader(header)] ?? "")
     .find((value) => value !== "") ?? "";
-}
-
-function findPrecinct(norm: Record<string, string>, raw: Record<string, unknown>): string {
-  const directMatches = [
-    "PRECINCTNO",
-    "PRECINCT",
-    "PRECINCTNUMBER",
-    "PRECINCTID",
-    "PN",
-    "PRECNO",
-    "PCTNO",
-    "PRCNTNO",
-    "VOTERSPRECINCT",
-    "VOTERPRECINCT",
-    "CLUSTEREDPRECINCT",
-    "ESTABLISHEDPRECINCT",
-  ];
-  for (const k of directMatches) {
-    if (norm[k]) return norm[k];
-  }
-  for (const [k, v] of Object.entries(norm)) {
-    if (!v) continue;
-    if (k.includes("PRECINCT") || k.includes("PRCNT") || k === "PN" || k.startsWith("PCT") || k.startsWith("PREC")) {
-      return v;
-    }
-  }
-  for (const [rawKey, rawVal] of Object.entries(raw)) {
-    const v = str(rawVal);
-    if (!v) continue;
-    const clean = rawKey.trim().toLowerCase();
-    if (clean.includes("precinct") || clean.includes("prcnt") || clean.startsWith("pct") || clean === "pn" || clean.startsWith("prec")) {
-      return v;
-    }
-  }
-  return "";
-}
-
-function findSerialNo(norm: Record<string, string>, raw: Record<string, unknown>): string {
-  const directMatches = [
-    "NO",
-    "SN",
-    "SERIALNO",
-    "SERIALNUMBER",
-    "VOTERNO",
-    "VOTERNUMBER",
-    "SEQNO",
-    "SEQUENCENO",
-  ];
-  for (const k of directMatches) {
-    if (norm[k]) return norm[k];
-  }
-  for (const [rawKey, rawVal] of Object.entries(raw)) {
-    const v = str(rawVal);
-    if (!v) continue;
-    const clean = rawKey.trim().toLowerCase();
-    if (clean === "no" || clean === "no." || clean === "#" || clean === "sn" || clean === "s.n." || clean.includes("serial") || clean.includes("voter no")) {
-      return v;
-    }
-  }
-  return "";
 }
 
 // ── Normalize Purok Code to Standard Purok Name ──────────────────────────────
@@ -138,7 +76,7 @@ export async function parseEntrySheet(
   const book = XLSX.read(buffer, { type: "array" });
 
   const entrySheetName = book.SheetNames.find(
-    (n) => n.toUpperCase() === "ENTRY",
+    (n) => n.toUpperCase().trim() === "ENTRY",
   );
   if (!entrySheetName) {
     throw new Error(
@@ -147,32 +85,7 @@ export async function parseEntrySheet(
   }
 
   const sheet = book.Sheets[entrySheetName]!;
-  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-
-  let headerRowIndex = 0;
-  for (let r = 0; r < Math.min(10, aoa.length); r++) {
-    const rowCells = (aoa[r] || []).map((c) => String(c ?? "").trim().toUpperCase());
-    const hasVoterHeader = rowCells.some((c) =>
-      c.includes("PRECINCT") ||
-      c.includes("LAST") ||
-      c.includes("FIRST") ||
-      c === "PN" ||
-      c === "SN" ||
-      c === "NO" ||
-      c === "NO." ||
-      c.includes("VOTER") ||
-      c.includes("NAME")
-    );
-    if (hasVoterHeader) {
-      headerRowIndex = r;
-      break;
-    }
-  }
-
-  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
-    sheet,
-    { range: headerRowIndex, defval: "" },
-  );
+  const rawRows = readImportRows(XLSX, sheet);
 
   if (rawRows.length === 0) {
     throw new Error('The "ENTRY" sheet has no data rows.');
@@ -184,9 +97,10 @@ export async function parseEntrySheet(
     for (const [key, val] of Object.entries(raw)) {
       norm[normalizedHeader(key)] = str(val);
     }
+    const identifiers = readVoterIdentifiers(raw);
     return {
-      PN: findPrecinct(norm, raw),
-      SN: findSerialNo(norm, raw),
+      PN: identifiers.precinct,
+      SN: identifiers.no,
       LAST: readColumn(norm, "LAST", "Last Name", "Surname", "Family Name", "Apelyido"),
       FIRST: readColumn(norm, "FIRST", "First Name", "Given Name"),
       MIDDLE: readColumn(norm, "MIDDLE", "Middle Name", "MI", "Middle Initial"),

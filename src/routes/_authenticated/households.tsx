@@ -1,10 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Pencil, Plus, Trash2, UserCheck, Users } from "lucide-react";
+import { Pencil, Trash2, UserCheck, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { HouseholdModal } from "@/components/entity-modals";
 import { ModalShell } from "@/components/modal-shell";
 import { useStore } from "@/lib/store";
 import { memberFullName, type Household, type Member } from "@/lib/types";
+import { isClaimedHouseholdLeader } from "@/lib/claimed-households";
 
 export const Route = createFileRoute("/_authenticated/households")({
   component: HouseholdsPage,
@@ -13,7 +14,7 @@ export const Route = createFileRoute("/_authenticated/households")({
 function HouseholdsPage() {
   const { state, saveHouseholdWithUser, deleteHousehold } = useStore();
   const navigate = useNavigate();
-  const [editing, setEditing] = useState<Household | null | "new">(null);
+  const [editing, setEditing] = useState<Household | null>(null);
   const [viewing, setViewing] = useState<Household | null>(null);
   const purokById = useMemo(
     () => new Map(state.puroks.map((purok) => [purok.id, purok])),
@@ -28,6 +29,15 @@ function HouseholdsPage() {
     });
     return grouped;
   }, [state.members]);
+  const claimedHouseholds = useMemo(
+    () =>
+      state.households.filter((household) =>
+        (membersByHouseholdId.get(household.id) ?? []).some((member) =>
+          isClaimedHouseholdLeader(member, household),
+        ),
+      ),
+    [state.households, membersByHouseholdId],
+  );
 
   useEffect(() => {
     if (state.session?.role !== "Admin") void navigate({ to: "/my-dashboard" });
@@ -38,18 +48,14 @@ function HouseholdsPage() {
       <header className="border-b border-slate-200 bg-white px-6 py-4">
         <h1 className="text-lg font-semibold">Household Leaders</h1>
         <p className="text-sm text-slate-500">
-          Manage household records and their leaders
+          Claimed household leaders assigned to a purok
         </p>
       </header>
       <div className="space-y-4 p-6">
-        <div>
-          <button
-            onClick={() => setEditing("new")}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
-          >
-            <Plus className="h-3.5 w-3.5" /> Add Household
-          </button>
-        </div>
+        <p className="text-sm text-slate-500">
+          {claimedHouseholds.length} claimed household
+          {claimedHouseholds.length === 1 ? "" : "s"}
+        </p>
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -64,11 +70,11 @@ function HouseholdsPage() {
                 </tr>
               </thead>
               <tbody>
-                {state.households.map((household) => {
+                {claimedHouseholds.map((household) => {
                   const householdMembers =
                     membersByHouseholdId.get(household.id) ?? [];
-                  const householdLeader = householdMembers.find(
-                    (member) => member.is_household_leader,
+                  const householdLeader = householdMembers.find((member) =>
+                    isClaimedHouseholdLeader(member, household),
                   );
                   const leaderName = householdLeader
                     ? memberFullName(householdLeader)
@@ -135,24 +141,23 @@ function HouseholdsPage() {
                     </tr>
                   );
                 })}
+                {claimedHouseholds.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="px-4 py-12 text-center text-slate-500"
+                    >
+                      No claimed household leaders yet. Claim a resident as a
+                      Household Leader to show them here.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
         </div>
       </div>
-      {editing === "new" && (
-        <HouseholdModal
-          puroksData={state.puroks}
-          barangaysData={state.barangays}
-          usersData={state.users}
-          onSave={(data, userAccount) => {
-            void saveHouseholdWithUser(data, userAccount);
-            setEditing(null);
-          }}
-          onClose={() => setEditing(null)}
-        />
-      )}
-      {editing && editing !== "new" && (
+      {editing && (
         <HouseholdModal
           initial={editing}
           puroksData={state.puroks}
@@ -188,7 +193,9 @@ function HouseholdMembersModal({
   purokName?: string | undefined;
   onClose: () => void;
 }) {
-  const selectedLeader = members.find((member) => member.is_household_leader);
+  const selectedLeader = members.find((member) =>
+    isClaimedHouseholdLeader(member, household),
+  );
   const displayedLeaderName = selectedLeader
     ? memberFullName(selectedLeader)
     : household.householdLeaderName;
