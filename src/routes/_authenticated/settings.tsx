@@ -11,7 +11,9 @@ import {
   Pencil,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
-import { exportToExcel, downloadTemplate } from "@/lib/excel";
+import { downloadTemplate } from "@/lib/excel";
+import { exportResidents } from "@/lib/export-residents";
+import { toast } from "sonner";
 import { ImportDataModal } from "@/components/import-data-modal";
 import type { Team } from "@/lib/types";
 
@@ -33,6 +35,7 @@ function SettingsPage() {
   const { state } = store;
   const navigate = useNavigate();
   const [showImportModal, setShowImportModal] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (state.session?.role !== "Admin") {
@@ -40,13 +43,19 @@ function SettingsPage() {
     }
   }, [state.session, navigate]);
 
-  const handleExport = () => {
-    void exportToExcel({
-      barangays: state.barangays,
-      puroks: state.puroks,
-      households: state.households,
-      members: state.members,
-    });
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const count = await exportResidents();
+      toast.success(`Exported ${count.toLocaleString()} residents.`);
+    } catch (error) {
+      toast.error("Could not export residents. Please try again.", {
+        description: error instanceof Error ? error.message : "Check your connection.",
+      });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleReset = () => {
@@ -87,7 +96,8 @@ function SettingsPage() {
             Excel Import / Export
           </h2>
           <p className="mb-5 text-xs text-slate-500">
-            Import Excel resident lists or export the current data.
+            Export includes all saved residents from imported Excel files and
+            new entries, with the latest saved changes.
           </p>
 
           <div className="flex flex-wrap gap-3">
@@ -100,9 +110,11 @@ function SettingsPage() {
 
             <button
               onClick={handleExport}
-              className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              disabled={exporting}
+              aria-busy={exporting}
+              className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-wait disabled:opacity-50"
             >
-              <Download className="h-4 w-4" /> Export Excel
+              <Download className="h-4 w-4" /> {exporting ? "Exporting…" : "Export Excel"}
             </button>
 
             <button

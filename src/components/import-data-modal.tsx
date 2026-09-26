@@ -33,6 +33,7 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [ignoredCount, setIgnoredCount] = useState<number>(0);
+  const [updateExistingDetails, setUpdateExistingDetails] = useState(false);
 
   const isCancelledRef = useRef<boolean>(false);
 
@@ -164,7 +165,7 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
     };
 
     try {
-      await processBatchUpload(queue, onProgress, () => isCancelledRef.current);
+      await processBatchUpload(queue, onProgress, () => isCancelledRef.current, { updateExistingDetails });
     } finally {
       setIsProcessing(false);
       // Refresh local store with all newly added records
@@ -553,6 +554,23 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
           )}
 
           {/* Info Card */}
+          <label className="flex items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={updateExistingDetails}
+              disabled={isProcessing}
+              onChange={(event) => setUpdateExistingDetails(event.target.checked)}
+              className="mt-1 h-4 w-4 accent-indigo-600"
+            />
+            <span>
+              <span className="block font-semibold">Update existing residents with Excel details</span>
+              <span className="mt-1 block text-xs text-slate-500">
+                For matching names in this barangay, replace age, religion, civil status,
+                roles, sectors, address, and remarks with nonblank values from the file.
+                Blank or absent columns keep saved values. Leave unchecked to preserve existing details.
+              </span>
+            </span>
+          </label>
           <div className="flex items-start gap-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
             <CheckCircle className="h-4 w-4 text-indigo-600 mt-0.5 flex-shrink-0" />
             <div className="text-xs text-indigo-900 space-y-1">
@@ -561,8 +579,9 @@ export function ImportDataModal({ onClose }: { onClose: () => void }) {
                 Include <strong>Precinct</strong> (or <code>PN</code>) and{" "}
                 <strong>No.</strong> (or <code>SN</code>) in your sheet to fill
                 both member-list columns. Leading zeros are preserved.
-                Re-importing fills missing values for matching residents without
-                replacing saved values.
+                Age, Religion, Civil Status (or Status), PL/PI, HL, HM, SC, PWD,
+                IP, Address, and Remarks are imported when provided. By default,
+                re-importing only fills missing voter identifiers for matching residents.
               </p>
               <p className="text-indigo-800 leading-relaxed">
                 For each uploaded file, the importer will check if the Barangay

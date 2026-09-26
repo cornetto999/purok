@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { Member, Household, Purok, Barangay } from "@/lib/types";
 import { memberFullName } from "@/lib/types";
+import { memberPurokId } from "@/lib/member-assignment";
 
 function sectorBadges(m: Member) {
   const badges: {
@@ -98,7 +99,8 @@ export function MemberDetailPanel({
   onDelete: () => void;
 }) {
   const household = householdById.get(member.householdId);
-  const purok = household ? purokById.get(household.purokId) : undefined;
+  const purokId = memberPurokId(member, householdById);
+  const purok = purokId == null ? undefined : purokById.get(purokId);
   const barangay = purok ? barangayById.get(purok.barangayId) : undefined;
   const fullName = memberFullName(member);
 

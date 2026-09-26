@@ -3,9 +3,10 @@ import { normalizedHeader, readVoterIdentifiers } from "./spreadsheet-columns";
 import { extractBarangayFromFileName } from "./barangay-data";
 import { normalizePurokName } from "./import-entry-sheet";
 import { supabase } from "./supabase";
-import type { Barangay, Purok, Household, Member, CivilStatus } from "./types";
+import type { Barangay, Purok, Household, Member } from "./types";
 import { fetchAllRows } from "./fetch-all-rows";
 import { importNameKey, missingVoterIdentifiers } from "./import-identifiers";
+import { defaultResidentDetails, importFlag, readResidentDetails, type ImportedDetails } from "./import-resident-details";
 
 export interface BatchItem {
   id: string;
@@ -21,6 +22,10 @@ export interface BatchItem {
   errorMessage?: string;
 }
 
+export interface ImportOptions {
+  updateExistingDetails?: boolean;
+}
+
 interface RawEntryRow {
   PN: string;
   SN: string;
@@ -33,10 +38,11 @@ interface RawEntryRow {
   HL: string;
   HM: string;
   REMARKS: string;
+  details: Partial<ImportedDetails>;
 }
 
 const str = (v: unknown): string => String(v ?? "").trim();
-const hasValue = (v: unknown): boolean => str(v) !== "";
+const hasValue = importFlag;
 function readColumn(row: Record<string, string>, ...headers: string[]): string {
   return (
     headers
@@ -77,6 +83,7 @@ export function createBatchItem(file: File): BatchItem {
 export async function processSingleFile(
   item: BatchItem,
   targetBarangayOverride?: string,
+  options: ImportOptions = {},
 ): Promise<{
   barangayId: number;
   barangayName: string;
@@ -153,9 +160,10 @@ export async function processSingleFile(
       MIDDLE: readColumn(norm, "MIDDLE", "Middle Name", "MI", "Middle Initial"),
       ADDRESS: readColumn(norm, "ADDRESS", "Voter Address", "Residence"),
       CODE: readColumn(norm, "CODE", "Purok", "Zone", "Sitio"),
-      PL: readColumn(norm, "PL"),
-      HL: readColumn(norm, "HL"),
-      HM: readColumn(norm, "HM"),
+      PL: readColumn(norm, "PL", "PI", "Purok Leader Indicator", "Is Purok Leader"),
+      HL: readColumn(norm, "HL", "Household Leader Indicator", "Is Household Leader"),
+      HM: readColumn(norm, "HM", "Household Member", "Is Household Member"),
+      details: readResidentDetails(raw),
       REMARKS: readColumn(
         norm,
         "REMARKS",
@@ -266,7 +274,7 @@ export async function processSingleFile(
   }
 
   // Map HL & HM to Households and Members
-  let currentActiveHouseholdId: number | null = null;
+  const activeHouseholdByPurok = new Map<number, number>();
   const householdInsertBatch: {
     purokId: number;
     barangayId: number;
@@ -328,6 +336,7 @@ export async function processSingleFile(
 
   // Pass 2: Map Members
   const memberList: Omit<Member, "id">[] = [];
+  const detailPatches: Partial<Member>[] = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -338,13 +347,11 @@ export async function processSingleFile(
       purokIdMap.get(normCode) || Array.from(purokIdMap.values())[0] || 0;
 
     if (rowIndexToHouseholdId.has(i)) {
-      currentActiveHouseholdId = rowIndexToHouseholdId.get(i)!;
-    } else if (!currentActiveHouseholdId && pId) {
-      currentActiveHouseholdId = defaultHouseholdPerPurok.get(pId) ?? null;
+      activeHouseholdByPurok.set(pId, rowIndexToHouseholdId.get(i)!);
     }
 
     const hId =
-      currentActiveHouseholdId ||
+      activeHouseholdByPurok.get(pId) ||
       (pId ? defaultHouseholdPerPurok.get(pId) : null) ||
       1;
 
@@ -359,16 +366,14 @@ export async function processSingleFile(
       pn: row.PN || "",
       address: row.ADDRESS || `${normCode}, ${barangayName}`,
       code: row.CODE || "",
-      is_purok_leader_indicator: hasValue(row.PL),
-      is_household_leader: hasValue(row.HL),
-      is_household_member: hasValue(row.HM),
-      age: 0,
-      religion: "",
-      status: "Single" as CivilStatus,
-      sc: false,
-      pwd: false,
-      ip: false,
+      ...defaultResidentDetails,
+      ...row.details,
       remarks: row.REMARKS || "",
+    });
+    detailPatches.push({
+      ...row.details,
+      ...(row.ADDRESS ? { address: row.ADDRESS } : {}),
+      ...(row.REMARKS ? { remarks: row.REMARKS } : {}),
     });
   }
 
@@ -381,10 +386,7 @@ export async function processSingleFile(
   const existingMembers = await fetchAllRows<ExistingMember>((from, to) =>
     supabase
       .from("members")
-      .select(
-        "id, lastName, firstName, middleName, precinct, no, pn",
-        from === 0 ? { count: "exact" } : {},
-      )
+      .select("*", from === 0 ? { count: "exact" } : {})
       .eq("barangayId", barangayId)
       .order("id")
       .range(from, to),
@@ -401,7 +403,7 @@ export async function processSingleFile(
   const toUpdate: { id: number; patch: Partial<Member> }[] = [];
   const toInsert: Omit<Member, "id">[] = [];
 
-  for (const m of memberList) {
+  for (const [index, m] of memberList.entries()) {
     const matches = existingMap.get(importNameKey(m)) ?? [];
     if (matches.length > 1) {
       throw new Error(
@@ -410,7 +412,10 @@ export async function processSingleFile(
     }
     const existing = matches[0];
     if (existing) {
-      const patch = missingVoterIdentifiers(existing, m);
+      const patch: Partial<Member> = {
+        ...missingVoterIdentifiers(existing, m),
+        ...(options.updateExistingDetails ? detailPatches[index] : {}),
+      };
       if (Object.keys(patch).length > 0) {
         toUpdate.push({ id: existing.id, patch });
       }
@@ -458,6 +463,7 @@ export async function processBatchUpload(
   items: BatchItem[],
   onProgress: (itemId: string, patch: Partial<BatchItem>) => void,
   isCancelled: () => boolean,
+  options: ImportOptions = {},
 ): Promise<{
   successfulCount: number;
   failedCount: number;
@@ -486,7 +492,7 @@ export async function processBatchUpload(
     onProgress(item.id, { status: "processing" });
 
     try {
-      const result = await processSingleFile(item);
+      const result = await processSingleFile(item, undefined, options);
 
       if (isCancelled()) {
         onProgress(item.id, {

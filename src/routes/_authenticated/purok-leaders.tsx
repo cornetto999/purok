@@ -2,7 +2,9 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Pencil, Plus, Trash2, UserCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { PurokModal } from "@/components/entity-modals";
+import { PurokMembersDialog } from "@/components/purok-members-dialog";
 import { useStore } from "@/lib/store";
+import { getPurokLeaderRows } from "@/lib/purok-leaders";
 import type { Purok } from "@/lib/types";
 
 export const Route = createFileRoute("/_authenticated/purok-leaders")({
@@ -13,6 +15,21 @@ function PurokLeadersPage() {
   const { state, savePurokWithUser, deletePurok } = useStore();
   const navigate = useNavigate();
   const [editing, setEditing] = useState<Purok | null | "new">(null);
+  const leaders = useMemo(
+    () =>
+      getPurokLeaderRows({
+        puroks: state.puroks,
+        users: state.users,
+        households: state.households,
+        members: state.members,
+      }),
+    [state.puroks, state.users, state.households, state.members],
+  );
+  const householdById = useMemo(
+    () =>
+      new Map(state.households.map((household) => [household.id, household])),
+    [state.households],
+  );
   const barangayById = useMemo(
     () => new Map(state.barangays.map((barangay) => [barangay.id, barangay])),
     [state.barangays],
@@ -27,7 +44,7 @@ function PurokLeadersPage() {
       <header className="border-b border-slate-200 bg-white px-6 py-4">
         <h1 className="text-lg font-semibold">Purok Leaders</h1>
         <p className="text-sm text-slate-500">
-          Manage puroks and their assigned leaders
+          Select a purok leader to view their members
         </p>
       </header>
       <div className="space-y-4 p-6">
@@ -36,7 +53,7 @@ function PurokLeadersPage() {
             onClick={() => setEditing("new")}
             className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
           >
-            <Plus className="h-3.5 w-3.5" /> Add Purok
+            <Plus className="h-3.5 w-3.5" /> Add Purok Leader
           </button>
         </div>
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -44,8 +61,8 @@ function PurokLeadersPage() {
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                  <th className="px-4 py-2.5">Purok</th>
                   <th className="px-4 py-2.5">Leader</th>
+                  <th className="px-4 py-2.5">Purok</th>
                   <th className="px-4 py-2.5">Account</th>
                   <th className="px-4 py-2.5">Barangay</th>
                   <th className="px-4 py-2.5">Households</th>
@@ -54,32 +71,39 @@ function PurokLeadersPage() {
                 </tr>
               </thead>
               <tbody>
-                {state.puroks.map((purok) => {
-                  const households = state.households.filter(
-                    (household) => household.purokId === purok.id,
-                  );
-                  const householdIds = new Set(
-                    households.map((household) => household.id),
-                  );
-                  const leaderUser = state.users.find(
-                    (u) =>
-                      u.role === "Purok Leader" &&
-                      u.linked_entity_id === purok.id,
-                  );
-
-                  return (
+                {leaders.map(
+                  ({
+                    purok,
+                    leaderName,
+                    leaderUser,
+                    householdCount,
+                    members,
+                  }) => (
                     <tr
                       key={purok.id}
                       className="border-b border-slate-100 last:border-0 hover:bg-slate-50"
                     >
-                      <td className="px-4 py-2.5 font-medium">{purok.name}</td>
+                      <td className="px-4 py-2.5 font-medium">
+                        <PurokMembersDialog
+                          purok={purok}
+                          leaderName={leaderName}
+                          barangayName={
+                            barangayById.get(purok.barangayId)?.name ?? "—"
+                          }
+                          members={members}
+                          households={householdById}
+                          triggerLabel={leaderName}
+                          triggerClassName="rounded text-left text-indigo-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+                        />
+                      </td>
                       <td className="px-4 py-2.5 text-slate-600">
-                        {purok.purokLeaderName}
+                        {purok.name}
                       </td>
                       <td className="px-4 py-2.5">
                         {leaderUser ? (
                           <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 font-mono text-xs font-medium text-emerald-700">
-                            <UserCheck className="h-3 w-3" />@{leaderUser.username}
+                            <UserCheck className="h-3 w-3" />@
+                            {leaderUser.username}
                           </span>
                         ) : (
                           <span className="text-xs italic text-slate-400">
@@ -91,23 +115,21 @@ function PurokLeadersPage() {
                         {barangayById.get(purok.barangayId)?.name ?? "—"}
                       </td>
                       <td className="px-4 py-2.5 text-slate-600">
-                        {households.length}
+                        {householdCount}
                       </td>
                       <td className="px-4 py-2.5 text-slate-600">
-                        {
-                          state.members.filter((member) =>
-                            householdIds.has(member.householdId),
-                          ).length
-                        }
+                        {members.length}
                       </td>
                       <td className="px-4 py-2.5">
                         <button
                           onClick={() => setEditing(purok)}
+                          aria-label={`Edit ${leaderName}`}
                           className="rounded-md p-1 text-slate-400 hover:bg-slate-100"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                         <button
+                          aria-label={`Delete ${purok.name}`}
                           onClick={() => {
                             if (confirm(`Delete "${purok.name}"?`))
                               void deletePurok(purok.id);
@@ -118,8 +140,20 @@ function PurokLeadersPage() {
                         </button>
                       </td>
                     </tr>
-                  );
-                })}
+                  ),
+                )}
+                {leaders.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-4 py-12 text-center text-slate-500"
+                    >
+                      {state.loading
+                        ? "Loading purok leaders…"
+                        : "No assigned purok leaders yet. Add a leader to show them here."}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

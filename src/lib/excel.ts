@@ -1,6 +1,6 @@
 import { readImportRows, readVoterIdentifiers } from "./spreadsheet-columns";
 import type { Barangay, Household, Member, Purok, CivilStatus } from "./types";
-import { memberFullName } from "./types";
+import { memberPurokId } from "./member-assignment";
 
 export interface DataSet {
   barangays: Barangay[];
@@ -46,15 +46,17 @@ export function toRows(data: DataSet): Row[] {
   const bg = new Map(data.barangays.map((b) => [b.id, b]));
   return data.members.map((m) => {
     const household = hh.get(m.householdId);
-    const purok = household ? pk.get(household.purokId) : undefined;
-    const barangay = purok ? bg.get(purok.barangayId) : undefined;
+    const purokId = memberPurokId(m, hh);
+    const purok = purokId == null ? undefined : pk.get(purokId);
+    const barangayId = purok?.barangayId ?? m.barangayId ?? household?.barangayId;
+    const barangay = barangayId == null ? undefined : bg.get(barangayId);
     return {
       Barangay: barangay?.name ?? "",
       "Barangay Captain": barangay?.barangayCaptainName ?? "",
       Purok: purok?.name ?? "",
       "Purok Leader": purok?.purokLeaderName ?? "",
       "Household Leader": household?.householdLeaderName ?? "",
-      Address: household?.address ?? "",
+      Address: m.address || household?.address || "",
       "Last Name": m.lastName,
       "First Name": m.firstName,
       "Middle Name": m.middleName,

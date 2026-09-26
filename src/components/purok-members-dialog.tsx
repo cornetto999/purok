@@ -34,11 +34,17 @@ export function PurokMembersDialog({
   barangayName,
   members,
   households,
+  leaderName = purok.purokLeaderName || "—",
+  triggerLabel = "View Members →",
+  triggerClassName = "w-full rounded-lg border border-slate-200 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50",
 }: {
   purok: Purok;
   barangayName: string;
   members: Member[];
   households: ReadonlyMap<number, Household>;
+  leaderName?: string;
+  triggerLabel?: string;
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -46,9 +52,10 @@ export function PurokMembersDialog({
       <DialogTrigger asChild>
         <button
           type="button"
-          className="w-full rounded-lg border border-slate-200 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+          className={triggerClassName}
+          title={`View members of ${leaderName}`}
         >
-          View Members →
+          {triggerLabel}
         </button>
       </DialogTrigger>
       <DialogContent className="flex max-h-[85vh] w-[calc(100%-2rem)] max-w-4xl flex-col overflow-hidden">
@@ -56,7 +63,7 @@ export function PurokMembersDialog({
           <DialogTitle>{purok.name} · Members</DialogTitle>
           <DialogDescription>
             {barangayName} · {members.length.toLocaleString()} residents ·
-            Leader: {purok.purokLeaderName || "—"}
+            Leader: {leaderName}
           </DialogDescription>
         </DialogHeader>
         {open && <MemberRoster members={members} households={households} />}

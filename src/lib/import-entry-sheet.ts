@@ -9,9 +9,10 @@ import { normalizedHeader, readImportRows, readVoterIdentifiers } from "./spread
  *   Barangay → Purok (by CODE) → Household (by HL rows) → Members (HM rows)
  */
 
-import type { Barangay, Purok, Household, Member, CivilStatus } from "./types";
+import type { Barangay, Purok, Household, Member } from "./types";
 import type { DataSet } from "./excel";
 import { extractBarangayFromFileName } from "./barangay-data";
+import { defaultResidentDetails, importFlag, readResidentDetails, type ImportedDetails } from "./import-resident-details";
 
 // ── Raw row shape from the ENTRY sheet ────────────────────────────────────────
 
@@ -27,6 +28,7 @@ interface EntryRow {
   HL: string;
   HM: string;
   REMARKS: string;
+  details: Partial<ImportedDetails>;
 }
 
 // ── Summary returned before committing ────────────────────────────────────────
@@ -43,7 +45,7 @@ export interface ImportSummary {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const str = (v: unknown): string => String(v ?? "").trim();
-const hasValue = (v: unknown): boolean => str(v) !== "";
+const hasValue = importFlag;
 function readColumn(
   row: Record<string, string>,
   ...headers: string[]
@@ -106,9 +108,10 @@ export async function parseEntrySheet(
       MIDDLE: readColumn(norm, "MIDDLE", "Middle Name", "MI", "Middle Initial"),
       ADDRESS: readColumn(norm, "ADDRESS", "Voter Address", "Residence"),
       CODE: readColumn(norm, "CODE", "Purok", "Zone", "Sitio"),
-      PL: readColumn(norm, "PL"),
-      HL: readColumn(norm, "HL"),
-      HM: readColumn(norm, "HM"),
+      PL: readColumn(norm, "PL", "PI", "Purok Leader Indicator", "Is Purok Leader"),
+      HL: readColumn(norm, "HL", "Household Leader Indicator", "Is Household Leader"),
+      HM: readColumn(norm, "HM", "Household Member", "Is Household Member"),
+      details: readResidentDetails(raw),
       REMARKS: readColumn(norm, "REMARKS", "Remarks / Notes", "Remarks", "Notes"),
     };
   });
@@ -185,6 +188,7 @@ function processImportedData(rows: EntryRow[], barangayName: string = "Imported 
   let householdIdCounter = 0;
   let memberIdCounter = 0;
   let currentHouseholdId: number | null = null;
+  const activeHouseholds = new Map<number, number>();
 
   for (const row of rows) {
     const lastName = str(row.LAST);
@@ -198,6 +202,7 @@ function processImportedData(rows: EntryRow[], barangayName: string = "Imported 
     const normCode = normalizePurokName(code);
     const purokInfo = purokMap.get(normCode);
     const purokId = purokInfo?.id ?? 1; // fallback to first purok
+    currentHouseholdId = activeHouseholds.get(purokId) ?? null;
 
     const isPL = hasValue(row.PL);
     const isHL = hasValue(row.HL);
@@ -219,6 +224,8 @@ function processImportedData(rows: EntryRow[], barangayName: string = "Imported 
       });
       currentHouseholdId = householdIdCounter;
     }
+
+    activeHouseholds.set(purokId, currentHouseholdId);
 
     // If we haven't encountered an HL yet, create a catch-all household
     if (currentHouseholdId === null) {
@@ -245,16 +252,8 @@ function processImportedData(rows: EntryRow[], barangayName: string = "Imported 
       pn: str(row.PN),
       address: str(row.ADDRESS),
       code,
-      is_purok_leader_indicator: isPL,
-      is_household_leader: isHL,
-      is_household_member: isHM,
-      // Fields not in Excel → defaults
-      age: 0,
-      religion: "",
-      status: "Single" as CivilStatus,
-      sc: false,
-      pwd: false,
-      ip: false,
+      ...defaultResidentDetails,
+      ...row.details,
       remarks: str(row.REMARKS),
     });
   }

@@ -330,13 +330,16 @@ export function MembersPage({
     sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : " ↕";
 
   // CRUD
-  const saveMember = (data: Omit<Member, "id">, id?: number) => {
+  const saveMember = async (data: Omit<Member, "id">, id?: number) => {
     if (id !== undefined) {
-      store.updateMember(id, data);
-      if (selected?.id === id) setSelected({ ...data, id });
+      await store.updateMember(id, data);
+      setSelected((current) =>
+        current?.id === id ? { ...current, ...data } : current,
+      );
     } else {
-      store.addMember(data);
+      await store.addMember(data);
     }
+    toast.success(id !== undefined ? "Member changes saved." : "Member added.");
     setModal(null);
   };
 
