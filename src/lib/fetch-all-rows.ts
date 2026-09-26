@@ -16,9 +16,15 @@ export async function fetchAllRows<T>(
   const rows = (first.data ?? []) as T[];
   if (rows.length === 0) return rows;
 
-  // Respect a server row limit smaller than the requested page size.
+  // Use the actual number of rows returned by the server as the effective page
+  // size. PostgREST / Supabase can enforce a max-rows cap that is lower than
+  // our requested PAGE_SIZE (e.g. 870), so we must not assume PAGE_SIZE rows
+  // per page when deciding whether there is more data to fetch.
   const pageSize = rows.length;
+
   if (first.count != null) {
+    // Fast path: server returned an exact total count — use it to drive
+    // concurrent fetches so we can load 15k+ rows in a few parallel batches.
     for (
       let from = pageSize;
       from < first.count;
@@ -45,13 +51,15 @@ export async function fetchAllRows<T>(
     return rows;
   }
 
-  // Compatibility for endpoints that cannot supply an exact count.
-  if (rows.length < PAGE_SIZE) return rows;
-  for (let from = PAGE_SIZE; ; from += PAGE_SIZE) {
-    const result = await fetchPage(from, from + PAGE_SIZE - 1);
+  // Compatibility path for endpoints that cannot supply an exact count.
+  // Compare against the *actual* server page size (pageSize), NOT PAGE_SIZE,
+  // so that a server-enforced max-rows cap doesn't cause premature termination.
+  if (rows.length < pageSize) return rows;
+  for (let from = pageSize; ; from += pageSize) {
+    const result = await fetchPage(from, from + pageSize - 1);
     if (result.error) throw new Error(result.error.message);
     const page = (result.data ?? []) as T[];
     rows.push(...page);
-    if (page.length < PAGE_SIZE) return rows;
+    if (page.length < pageSize) return rows;
   }
 }
